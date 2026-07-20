@@ -1,0 +1,9 @@
+# -*- coding: utf-8 -*-
+fastapi
+uvicorn
+paddlepaddle>=2.6
+paddleocr>=3.0          # 3.x 的 PP-OCRv6 模型识别率明显更好；代码同时兼容 2.x
+pillow
+numpy<2
+requests
+python-dotenv
