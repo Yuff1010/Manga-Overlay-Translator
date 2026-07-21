@@ -1,0 +1,5 @@
+# -*- coding: utf-8 -*-
+# 可选：气泡分割增强。先安装 requirements.txt，再安装本文件。
+# PaddleOCR 已经安装了 OpenCV；这里只补 ONNX Runtime，避免重复的 cv2 包冲突。
+onnxruntime
+protobuf<6
