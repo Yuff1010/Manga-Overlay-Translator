@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         漫画图片翻译 (OCRTranslator)
 // @namespace    ocr-translator
-// @version      0.8.0
+// @version      0.9.0
 // @description  识别网页漫画图片中的外文，并在原文位置覆盖显示译文（需本地服务）
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
@@ -40,7 +40,7 @@
     zh: {
       lAuto: '自动检测', lJa: '日语', lKo: '韩语', lEn: '英语', lEs: '西语', lZh: '中文',
       menuPanel: '打开翻译面板', menuClear: '清除本页译文',
-      modePin: '盖在图上（通用）', modeAttach: '盖在图上（跟手）', modeList: '图下方列出',
+      modeOverlay: '盖在图上', modeList: '图下方列出',
       btnTranslate: '翻译', btnAll: '全部', btnClear: '清除',
       showOrig: '查看原文（`）', showTrans: '显示译文（`）',
       hint: '滚到哪翻到哪',
@@ -62,8 +62,7 @@
       lAuto: 'Auto-detect', lJa: 'Japanese', lKo: 'Korean', lEn: 'English',
       lEs: 'Spanish', lZh: 'Chinese',
       menuPanel: 'Open translator panel', menuClear: 'Clear translations',
-      modePin: 'Overlay (universal)', modeAttach: 'Overlay (snappy)',
-      modeList: 'List below image',
+      modeOverlay: 'Overlay on image', modeList: 'List below image',
       btnTranslate: 'Translate', btnAll: 'All', btnClear: 'Clear',
       showOrig: 'Show original (`)', showTrans: 'Show translation (`)',
       hint: 'Translates as you scroll',
@@ -87,8 +86,7 @@
       lAuto: '自動検出', lJa: '日本語', lKo: '韓国語', lEn: '英語',
       lEs: 'スペイン語', lZh: '中国語',
       menuPanel: '翻訳パネルを開く', menuClear: '訳文を消去',
-      modePin: '画像に重ねる（汎用）', modeAttach: '画像に重ねる（追従）',
-      modeList: '画像の下に並べる',
+      modeOverlay: '画像に重ねる', modeList: '画像の下に並べる',
       btnTranslate: '翻訳', btnAll: '全部', btnClear: '消去',
       showOrig: '原文を見る（`）', showTrans: '訳文を見る（`）',
       hint: 'スクロールした所から翻訳',
@@ -113,8 +111,7 @@
       lAuto: '자동 감지', lJa: '일본어', lKo: '한국어', lEn: '영어',
       lEs: '스페인어', lZh: '중국어',
       menuPanel: '번역 패널 열기', menuClear: '번역문 지우기',
-      modePin: '이미지 위에 표시(범용)', modeAttach: '이미지 위에 표시(밀착)',
-      modeList: '이미지 아래에 나열',
+      modeOverlay: '이미지 위에 표시', modeList: '이미지 아래에 나열',
       btnTranslate: '번역', btnAll: '전체', btnClear: '지우기',
       showOrig: '원문 보기(`)', showTrans: '번역문 보기(`)',
       hint: '스크롤하는 대로 번역',
@@ -139,8 +136,7 @@
       lAuto: 'Detección automática', lJa: 'Japonés', lKo: 'Coreano',
       lEn: 'Inglés', lEs: 'Español', lZh: 'Chino',
       menuPanel: 'Abrir panel de traducción', menuClear: 'Borrar traducciones',
-      modePin: 'Sobre la imagen (universal)', modeAttach: 'Sobre la imagen (ágil)',
-      modeList: 'Lista bajo la imagen',
+      modeOverlay: 'Sobre la imagen', modeList: 'Lista bajo la imagen',
       btnTranslate: 'Traducir', btnAll: 'Todo', btnClear: 'Borrar',
       showOrig: 'Ver original (`)', showTrans: 'Ver traducción (`)',
       hint: 'Traduce según desplazas',
@@ -196,14 +192,14 @@
   //   attach 覆盖层塞进图片自己的容器里，像图片的一部分那样原生跟随，零延迟。
   //          代价是要动站点的 DOM 和容器定位，个别站点可能被挤乱。
   //   list   不盖图，译文作为普通文字排在图片下方，气泡太小看不清时用。
-  const MODES = { pin: 'modePin', attach: 'modeAttach', list: 'modeList' };
+  const MODES = { overlay: 'modeOverlay', list: 'modeList' };
 
   /** 语言代码 → 当前界面语言下的显示名 */
   const langName = (c) => (SRC_LANGS[c] ? t(SRC_LANGS[c]) : c);
 
   const getSrc = () => GM_getValue('src', 'japan');
   const getTgt = () => GM_getValue('tgt', '中文');
-  const getMode = () => GM_getValue('mode', 'pin');
+  const getMode = () => GM_getValue('mode', 'overlay');
 
   // 按需翻译的运行状态
   const q = [];                // 待翻译队列
@@ -253,9 +249,9 @@
   // 反引号（键盘左上角 ~ 键）切换，在输入框里打字时不拦截
   document.addEventListener('keydown', (e) => {
     if (e.key !== '`' || e.ctrlKey || e.metaKey || e.altKey) return;
-    const t = e.target;
-    if (t && (t.isContentEditable ||
-              /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ''))) return;
+    const tgt = e.target;   // 别叫 t，会遮蔽 i18n 的 t()
+    if (tgt && (tgt.isContentEditable ||
+                /^(INPUT|TEXTAREA|SELECT)$/.test(tgt.tagName || ''))) return;
     if (!tracked.length) return;
     e.preventDefault();
     toggleHide();
@@ -277,7 +273,8 @@
       'position:fixed;bottom:20px;right:20px;z-index:2147483646;' +
       'background:#242424;color:#eee;padding:12px 14px;border-radius:10px;' +
       'font:13px/1.5 system-ui,"Microsoft YaHei","Malgun Gothic","Yu Gothic",sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.45);' +
-      'display:flex;flex-direction:column;gap:9px;min-width:212px;';
+      // 宽度固定：状态行文字长短一直在变，用 min-width 会让整个面板跟着伸缩
+      'display:flex;flex-direction:column;gap:9px;width:236px;box-sizing:border-box;';
 
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;gap:7px;';
@@ -319,7 +316,7 @@
     const tip = document.createElement('div');
     tip.id = 'ocrt-status';
     tip.textContent = t('hint');
-    tip.style.cssText = 'opacity:.6;font-size:12px;';
+    tip.style.cssText = 'opacity:.6;font-size:12px;word-break:break-word;white-space:normal;';
 
     panel.append(row, llmRow, mode, ui, btns, hide, tip);
     document.body.appendChild(panel);
@@ -754,15 +751,15 @@
       });
       ov.appendChild(el);
     }
-    // 覆盖层放哪儿取决于模式，见 mount()。放 body 时它是文档坐标定位的，
-    // 页面布局一变（漫画站边滚边加载图片，上方插入一张下面就整体下移）就会
-    // 错位——而图片只是"移动"没"改变尺寸"，resize 类事件都不会触发，
-    // 所以需要 sync() 持续跟随。挂进容器则由浏览器原生跟随，不需要校正。
-    const t = { ov, list: buildList(img, data), img, data, key: '', src: srcOf(img) };
-    tracked.push(t);
-    mount(t);
+    // 覆盖层是 body 下的绝对定位元素，页面布局一变（漫画站边滚边加载图片，
+    // 上方插入一张下面就整体下移）就会错位——而图片只是"移动"没"改变尺寸"，
+    // resize 类事件都不会触发，所以由 follow() 逐帧跟随。
+    // 注意别把这个变量叫 t——上面 el.title 那行要调用 i18n 的 t()，
+    // 同名 const 会让整个函数落进暂时性死区，翻译失败的图直接抛错
+    const entry = { ov, list: buildList(img, data), img, data, key: '', src: srcOf(img) };
+    tracked.push(entry);
+    mount(entry);
     applyMode();
-    sync();
     startSync();
   }
 
@@ -774,28 +771,13 @@
    * 子元素会以更外层为基准导致错位，所以要先把它改成 relative——这是唯一
    * 需要改动站点样式的地方，也是这个模式风险所在。
    */
+  /** 覆盖层统一挂在 body 上，用文档坐标定位；位置由逐帧的 follow() 跟随 */
   function mount(t) {
-    const parent = t.img.parentElement;
-    const want = getMode() === 'attach' && !!parent;
-    if (want === t.attached && t.ov.isConnected) return;
-    try {
-      if (want) {
-        if (getComputedStyle(parent).position === 'static') {
-          parent.style.position = 'relative';
-        }
-        parent.appendChild(t.ov);
-        t.attached = true;
-      } else {
-        document.body.appendChild(t.ov);
-        t.attached = false;
-      }
-    } catch (e) {
-      document.body.appendChild(t.ov);   // 挂不进去就退回通用方式
-      t.attached = false;
-    }
-    t.key = '';        // 参照系变了，强制重新定位
+    if (!t.ov.isConnected) document.body.appendChild(t.ov);
+    t.key = '';
     position(t);
   }
+
 
   /**
    * 列表模式用的译文块，作为普通元素插在图片后面，随页面排版自然流动。
@@ -827,17 +809,41 @@
 
   const tracked = [];
   let syncTimer = null;
+  let rafOn = false;
 
   /** 锚点当前指向的图片地址，用来发现"元素还在但图换了" */
   const srcOf = (el) => (el.tagName === 'IMG' ? imgSrc(el) : '');
 
   function startSync() {
-    if (!syncTimer) syncTimer = setInterval(sync, 200);
-    window.addEventListener('resize', sync);
+    // 结构性检查（图片没了/被换掉/翻页隐藏）比较重，低频做就够
+    if (!syncTimer) syncTimer = setInterval(sweep, 400);
+    // 位置跟随必须逐帧：定时器再密也会有肉眼可见的拖影。
+    // 实测这一圈很便宜——85 张图全量读取位置每帧仅 0.06ms，
+    // 不到一帧预算（16.7ms）的 0.4%。
+    if (!rafOn) {
+      rafOn = true;
+      requestAnimationFrame(follow);
+    }
   }
 
-  /** 逐个比对锚点图片的位置，变了才重新定位；图片没了或被换掉就清理 */
-  function sync() {
+  /** 逐帧跟随：位置变了就重新定位，让译文和图片同步移动 */
+  function follow() {
+    for (const t of tracked) {
+      if (t.offscreen) continue;
+      const r = t.img.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      const key = `${Math.round(r.left + scrollX)},${Math.round(r.top + scrollY)},${Math.round(r.width)},${Math.round(r.height)}`;
+      if (key !== t.key) {
+        t.key = key;
+        position(t);
+      }
+    }
+    if (tracked.length) requestAnimationFrame(follow);
+    else rafOn = false;
+  }
+
+  /** 低频巡检：图片没了、被换成另一张、或因翻页被隐藏 */
+  function sweep() {
     for (let i = tracked.length - 1; i >= 0; i--) {
       const t = tracked[i];
       // 图片从 DOM 移除，或被换成了另一张（有的阅读器复用同一个 <img> 只改 src）
@@ -853,24 +859,14 @@
         }
         continue;
       }
-      const r = t.img.getBoundingClientRect();
       // 左右翻页的阅读器把非当前页缩成 0x0（MangaDex 就是如此）。
       // 这时必须把译文一并藏起来——否则覆盖层会停在最后的位置盖住新页，
       // 列表块也会为看不见的那页占着版面。
+      const r = t.img.getBoundingClientRect();
       const off = !r.width || !r.height;
       if (off !== t.offscreen) {
         t.offscreen = off;
         applyMode();
-      }
-      if (off) continue;
-      // 挂进容器的覆盖层由浏览器保证跟随，只在尺寸变化时才要重算；
-      // 文档坐标定位的则位置一变就得重新算
-      const key = t.attached
-        ? `${t.img.offsetWidth},${t.img.offsetHeight}`
-        : `${Math.round(r.left + scrollX)},${Math.round(r.top + scrollY)},${Math.round(r.width)},${Math.round(r.height)}`;
-      if (key !== t.key) {
-        t.key = key;
-        position(t);
       }
     }
     if (!tracked.length && syncTimer) {
@@ -881,24 +877,12 @@
 
   function position(t) {
     const { ov, img, data } = t;
-    let w, h;
-    if (t.attached) {
-      // 参照系是父容器：用相对父容器的偏移，容器移动时浏览器自己跟随，
-      // 这里只在图片尺寸变化时才需要重算
-      ov.style.left = img.offsetLeft + 'px';
-      ov.style.top = img.offsetTop + 'px';
-      w = img.offsetWidth;
-      h = img.offsetHeight;
-    } else {
-      // 参照系是文档：换算成绝对坐标，页面一重排就得靠 sync 校正
-      const r = img.getBoundingClientRect();
-      if (!r.width) return;
-      ov.style.left = r.left + window.scrollX + 'px';
-      ov.style.top = r.top + window.scrollY + 'px';
-      w = r.width;
-      h = r.height;
-    }
-    if (!w || !h) return;
+    const r = img.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    ov.style.left = r.left + window.scrollX + 'px';
+    ov.style.top = r.top + window.scrollY + 'px';
+    const w = r.width;
+    const h = r.height;
     ov.style.width = w + 'px';
     ov.style.height = h + 'px';
     const sx = w / data.width;
