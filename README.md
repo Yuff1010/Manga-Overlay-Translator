@@ -12,7 +12,11 @@
 - 支持整页翻译：一次处理当前页面可扫描到的全部漫画图。
 - 支持源语言选择：自动检测、日语、韩语、英语、西语、中文。
 - 支持目标语言选择：中文、英文、日文、韩文。
+- 支持在面板上切换 LLM 供应商和模型，也可手填模型名。
+- 面板显示本轮累计消耗的输入 / 输出 token。
 - 按图片原始坐标返回 OCR 文本框，前端按页面缩放比例定位覆盖层。
+- 支持三种显示方式：译文盖在图片原文位置（通用 / 跟手两种定位方式），或作为普通文字插在图片下方。
+- 面板界面支持中文、英文、日文、韩文、西班牙文，首次使用跟随浏览器语言。
 - 译文块支持悬停查看原文，点击临时隐藏译文查看原图。
 - 对超长条漫自动切片，避免 PaddleOCR 缩放后丢字。
 - 后端维护 OCR 实例池，支持多个前端请求并发处理。
@@ -87,10 +91,25 @@ cp .env.example .env
 编辑 `server/.env`：
 
 ```env
+LLM_NAME=DeepSeek
 LLM_BASE_URL=https://api.deepseek.com/v1
 LLM_API_KEY=sk-xxxx
 LLM_MODEL=deepseek-chat
+LLM_MODELS=deepseek-chat,deepseek-reasoner   # 可选，面板下拉里列出的模型
 ```
+
+想在面板上切换多个供应商，就再加几组，后缀从 2 开始递增：
+
+```env
+LLM_2_NAME=OpenAI
+LLM_2_BASE_URL=https://api.openai.com/v1
+LLM_2_API_KEY=sk-yyyy
+LLM_2_MODELS=gpt-4o-mini,gpt-4o
+```
+
+API Key 只保存在服务端。用户脚本以 `@match *://*/*` 注入所有页面，
+密钥若存进浏览器存储，脚本在任意网页上都能读到它，因此面板只在服务端
+预先配好的若干组之间切换，不接受填写密钥。
 
 启动服务：
 
@@ -119,12 +138,19 @@ http://127.0.0.1:8765/ping
 1. 打开一个漫画阅读页面。
 2. 点击浏览器里的 Tampermonkey 图标。
 3. 选择 `漫画图片翻译 (OCRTranslator)` 的菜单项：`🈯 打开翻译面板`。
-4. 在右下角面板里选择源语言和目标语言。
+4. 在右下角面板里选择源语言和目标语言。面板底部的语言下拉框可切换界面语言
+   （中文 / English / 日本語 / 한국어 / Español），首次打开会跟随浏览器语言。
 5. 点击：
    - `▶ 翻译`：按需翻译，滚动到图片附近时开始处理。
    - `⚡ 全部`：立即翻译当前页面所有可识别漫画图片。
    - `✖`：清除当前页面译文并重置状态。
-6. 对译文块：
+6. 用显示方式下拉框切换译文的呈现形式：
+   - `🖼 盖在图上`：译文覆盖在原文位置，默认方式。
+   - `📄 图下方列出`：译文作为普通文字插在图片下方，随页面排版换行，可选中复制。
+     气泡太窄导致字号被压得很小时，用这个更好读。
+
+   切换只改变显示方式，不会重新翻译。
+7. 对译文块：
    - 悬停可查看 OCR 原文。
    - 点击可临时隐藏 2 秒，方便看原图。
    - 按键盘反引号键 `` ` `` 可整体显示或隐藏译文。
@@ -151,7 +177,9 @@ http://127.0.0.1:8765/ping
 {
   "image": "data:image/jpeg;base64,...",
   "lang": "japan",
-  "target": "中文"
+  "target": "中文",
+  "profile": "1",
+  "model": "deepseek-chat"
 }
 ```
 
@@ -160,6 +188,8 @@ http://127.0.0.1:8765/ping
 - `image`：base64 图片，可以包含 `data:image/...;base64,` 前缀。
 - `lang`：PaddleOCR 语言代码，可选 `auto`、`japan`、`korean`、`en`、`es`、`ch`。
 - `target`：目标语言文案，例如 `中文`、`英文`、`日文`、`韩文`。
+- `profile`：可选，LLM 供应商编号。留空使用 `.env` 里的第一组。
+- `model`：可选，模型名。留空使用该供应商的默认模型。
 
 响应：
 
@@ -169,6 +199,10 @@ http://127.0.0.1:8765/ping
   "height": 1200,
   "lang": "japan",
   "translated": true,
+  "usage": {
+    "prompt_tokens": 80,
+    "completion_tokens": 6
+  },
   "blocks": [
     {
       "x": 33,
@@ -179,6 +213,21 @@ http://127.0.0.1:8765/ping
       "translation": "第三"
     }
   ]
+}
+```
+
+`usage` 统计的是这一张图消耗的 token，失败重试的消耗也计入其中。
+
+### `GET /config`
+
+返回可用的 LLM 供应商与模型，供用户脚本填充下拉框。响应不包含 API Key。
+
+```json
+{
+  "profiles": [
+    { "id": "1", "name": "DeepSeek", "models": ["deepseek-chat", "deepseek-reasoner"] }
+  ],
+  "default": { "profile": "1", "model": "deepseek-chat" }
 }
 ```
 

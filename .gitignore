@@ -36,3 +36,7 @@ dist/
 downloads/
 tmp/
 *.tmp
+
+# Local planning / agent docs
+PRD*.md
+AGENTS*.md
