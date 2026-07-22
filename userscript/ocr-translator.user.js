@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         漫画图片翻译 (OCRTranslator)
 // @namespace    ocr-translator
-// @version      0.9.0
+// @version      0.10.1
 // @description  识别网页漫画图片中的外文，并在原文位置覆盖显示译文（需本地服务）
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
@@ -41,6 +41,7 @@
       lAuto: '自动检测', lJa: '日语', lKo: '韩语', lEn: '英语', lEs: '西语', lZh: '中文',
       menuPanel: '打开翻译面板', menuClear: '清除本页译文',
       modeOverlay: '盖在图上', modeList: '图下方列出',
+      scopeDialogue: '只翻对白旁白', scopeAll: '翻译全部文字',
       btnTranslate: '翻译', btnAll: '全部', btnClear: '清除',
       showOrig: '查看原文（`）', showTrans: '显示译文（`）',
       hint: '滚到哪翻到哪',
@@ -63,6 +64,7 @@
       lEs: 'Spanish', lZh: 'Chinese',
       menuPanel: 'Open translator panel', menuClear: 'Clear translations',
       modeOverlay: 'Overlay on image', modeList: 'List below image',
+      scopeDialogue: 'Dialogue only', scopeAll: 'All text',
       btnTranslate: 'Translate', btnAll: 'All', btnClear: 'Clear',
       showOrig: 'Show original (`)', showTrans: 'Show translation (`)',
       hint: 'Translates as you scroll',
@@ -87,6 +89,7 @@
       lEs: 'スペイン語', lZh: '中国語',
       menuPanel: '翻訳パネルを開く', menuClear: '訳文を消去',
       modeOverlay: '画像に重ねる', modeList: '画像の下に並べる',
+      scopeDialogue: 'セリフとナレーションのみ', scopeAll: 'すべての文字',
       btnTranslate: '翻訳', btnAll: '全部', btnClear: '消去',
       showOrig: '原文を見る（`）', showTrans: '訳文を見る（`）',
       hint: 'スクロールした所から翻訳',
@@ -112,6 +115,7 @@
       lEs: '스페인어', lZh: '중국어',
       menuPanel: '번역 패널 열기', menuClear: '번역문 지우기',
       modeOverlay: '이미지 위에 표시', modeList: '이미지 아래에 나열',
+      scopeDialogue: '대사와 해설만', scopeAll: '모든 문자',
       btnTranslate: '번역', btnAll: '전체', btnClear: '지우기',
       showOrig: '원문 보기(`)', showTrans: '번역문 보기(`)',
       hint: '스크롤하는 대로 번역',
@@ -137,6 +141,7 @@
       lEn: 'Inglés', lEs: 'Español', lZh: 'Chino',
       menuPanel: 'Abrir panel de traducción', menuClear: 'Borrar traducciones',
       modeOverlay: 'Sobre la imagen', modeList: 'Lista bajo la imagen',
+      scopeDialogue: 'Solo diálogo', scopeAll: 'Todo el texto',
       btnTranslate: 'Traducir', btnAll: 'Todo', btnClear: 'Borrar',
       showOrig: 'Ver original (`)', showTrans: 'Ver traducción (`)',
       hint: 'Traduce según desplazas',
@@ -186,13 +191,11 @@
   /** 把 {值: 词条key} 映射成下拉框要的 {值: 当前语言显示名} */
   const labeled = (map) =>
     Object.fromEntries(Object.entries(map).map(([v, k]) => [v, t(k)]));
-  // 三种译文呈现方式：
-  //   pin    覆盖层挂在 body 上，靠算出的文档坐标定位。任何站点都能用，
-  //          但位置每 200ms 才校正一次，页面快速重排时会看到译文慢半拍。
-  //   attach 覆盖层塞进图片自己的容器里，像图片的一部分那样原生跟随，零延迟。
-  //          代价是要动站点的 DOM 和容器定位，个别站点可能被挤乱。
-  //   list   不盖图，译文作为普通文字排在图片下方，气泡太小看不清时用。
+  // 两种译文呈现方式：overlay 盖在原文位置并逐帧跟随图片；
+  // list 作为普通文字排在图片下方，气泡太小看不清时使用。
   const MODES = { overlay: 'modeOverlay', list: 'modeList' };
+  // 翻译范围：后端会给每个文本块标 dialogue，前端据此即时筛选，不必重翻
+  const SCOPES = { dialogue: 'scopeDialogue', all: 'scopeAll' };
 
   /** 语言代码 → 当前界面语言下的显示名 */
   const langName = (c) => (SRC_LANGS[c] ? t(SRC_LANGS[c]) : c);
@@ -200,6 +203,7 @@
   const getSrc = () => GM_getValue('src', 'japan');
   const getTgt = () => GM_getValue('tgt', '中文');
   const getMode = () => GM_getValue('mode', 'overlay');
+  const getScope = () => GM_getValue('scope', 'dialogue');
 
   // 按需翻译的运行状态
   const q = [];                // 待翻译队列
@@ -238,11 +242,20 @@
    */
   function applyMode() {
     const listMode = getMode() === 'list';
+    const onlyDialogue = getScope() === 'dialogue';
     for (const t of tracked) {
       if (!listMode) mount(t);              // 两种覆盖方式之间切换要换挂载点
       const off = hidden || t.offscreen;    // 整体隐藏，或图片当前不可见（翻页）
       if (t.ov) t.ov.style.display = off || listMode ? 'none' : '';
       if (t.list) t.list.style.display = off || !listMode ? 'none' : '';
+      // 非对白的块（音效、水印、噪声）按范围显隐。标记在翻译时就拿到了，
+      // 所以切范围只是改 display，不用重新请求
+      for (const box of [t.ov, t.list]) {
+        if (!box) continue;
+        for (const el of box.children) {
+          el.style.display = onlyDialogue && el.dataset.dlg === '0' ? 'none' : '';
+        }
+      }
     }
   }
 
@@ -298,6 +311,11 @@
       applyMode();      // 已翻好的不用重来，只是换个显示方式
     });
 
+    const scope = sel(labeled(SCOPES), getScope(), (v) => {
+      GM_setValue('scope', v);
+      applyMode();      // 同上：dialogue 标记已经在手，切范围只是显隐
+    });
+
     // 界面语言：换了要重建面板，因为每个控件的文案都是创建时定下的
     const ui = sel(UI_LANGS, getUI(), (v) => {
       GM_setValue('ui', v);
@@ -318,7 +336,7 @@
     tip.textContent = t('hint');
     tip.style.cssText = 'opacity:.6;font-size:12px;word-break:break-word;white-space:normal;';
 
-    panel.append(row, llmRow, mode, ui, btns, hide, tip);
+    panel.append(row, llmRow, mode, scope, ui, btns, hide, tip);
     document.body.appendChild(panel);
     toggleHide(hidden);   // 同步按钮文案到当前状态
     loadModels(llmRow);
@@ -508,13 +526,18 @@
   const inChrome = (el) => !!el.closest('header,footer,nav,aside');
 
   function big(el) {
-    // 懒加载的图 naturalWidth 还是占位图的 1x1，这时按页面上的实际显示尺寸判断
-    // （站点通常已为它预留了版位，webtoons 上就是 800x1280）
+    // 真加载完了：按图片自身尺寸判断，图标/头像在这里被滤掉
     if (el.tagName === 'IMG' && el.naturalWidth > 2) {
       return shaped(el.naturalWidth, el.naturalHeight);
     }
+    // 还没加载（占位 1x1）：先看显示尺寸——有的站为懒加载图预留了版位
+    // （webtoons 就是 800x1280），够大就算数
     const r = el.getBoundingClientRect();
-    return shaped(r.width, r.height);
+    if (shaped(r.width, r.height)) return true;
+    // 版位也塌缩了（dongmanhi 这类，整页图挤在几百 px 内）：
+    // 只要拿得到懒加载真实地址，就当内容图——懒加载几乎只用于正文大图，
+    // 图标不会这么处理。真抓下来若是小图，后端 OCR 出空也不会显示译文。
+    return el.tagName === 'IMG' && !!lazyUrl(el);
   }
 
   /**
@@ -733,6 +756,8 @@
       const el = document.createElement('div');
       el.className = 'ocrt-block';
       el.dataset.i = i;
+      // 后端标出的"是否对白"，供切换翻译范围时筛选
+      el.dataset.dlg = b.dialogue === false ? '0' : '1';
       el.textContent = b.translation || b.text;
       // 翻译失败时覆盖层显示的其实是原文，用淡黄底标出来，别让人误以为翻译成功
       const failed = data.translated === false;
@@ -796,6 +821,7 @@
       for (const b of data.blocks) {
         const line = document.createElement('div');
         line.textContent = b.translation || b.text;
+        line.dataset.dlg = b.dialogue === false ? '0' : '1';
         line.title = b.text;              // 悬停看原文，和覆盖模式一致
         line.style.cssText = 'margin:2px 0;';
         box.appendChild(line);

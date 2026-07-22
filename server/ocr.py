@@ -54,11 +54,15 @@ def _new_ocr(lang: str):
         ) from e
     if _is_v3():
         # 文档方向矫正和去扭曲是给扫描件用的，漫画用不上，关掉省时间
+        # Paddle 3.3.x + PP-OCRv6 在部分 Windows CPU 环境的 oneDNN 执行器
+        # 会报 ConvertPirAttribute2RuntimeAttribute；关闭 MKL-DNN 走稳定路径。
         return PaddleOCR(
             lang=lang,
             use_textline_orientation=True,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
+            enable_mkldnn=False,
+            cpu_threads=CPU_THREADS,
         )
     return PaddleOCR(
         use_angle_cls=True, lang=lang, show_log=False, cpu_threads=CPU_THREADS
@@ -251,8 +255,35 @@ def _close(a, b) -> bool:
     return gap_y < ref * 0.8 and gap_x < ref * 0.8
 
 
+def is_garbage(text: str) -> bool:
+    """判断是不是 OCR 垃圾——纯符号、页码、单个字母这类，任何模式下都没用。
+
+    只做"这压根不是文字"这一层判断。水印、音效属于"是文字但可能不想要"，
+    交给翻译阶段按语义判定，因为那需要理解内容，规则做不到。
+    """
+    s = text.strip()
+    if not s:
+        return True
+    letters = sum(1 for c in s if c.isalpha())
+    if letters == 0:
+        return True          # '%'、'...'、'10' 这类纯符号或纯数字
+    # 单个拉丁字母基本是误识别；但日文的「え」「あ」、中文单字都是正经台词，
+    # 不能一刀切按长度砍
+    if len(s) == 1 and s.isascii():
+        return True
+    return False
+
+
 def merge_lines(lines):
     """把相邻的行聚成块，返回块的外接矩形和拼接文本。"""
+    # 效果音/艺术字常被误识别成「框住整片区域、却只认出一两个字符」的巨框。
+    # 这种框物理上罩住周围多个气泡，会把它们全部链成一块——合并前先剔除。
+    # 只打击「内容是噪声 且 框很大」的，小噪声框（%、单字母）留给后面按语义处理，
+    # 免得误伤可能是句子片段的小框。
+    lines = [
+        ln for ln in lines
+        if not (is_garbage(ln["text"]) and max(ln["w"], ln["h"]) > 120)
+    ]
     groups = []
     for ln in sorted(lines, key=lambda l: (l["y"], l["x"])):
         merged = None
@@ -275,6 +306,9 @@ def merge_lines(lines):
         x2 = max(m["x"] + m["w"] for m in g)
         y2 = max(m["y"] + m["h"] for m in g)
         text = " ".join(m["text"] for m in sorted(g, key=lambda m: (m["y"], m["x"])))
+        # 合并之后再判垃圾：单看一行像噪声，拼进块里可能是完整句子的一部分
+        if is_garbage(text):
+            continue
         out.append(
             {
                 "x": round(x1),

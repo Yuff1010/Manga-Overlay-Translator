@@ -40,3 +40,6 @@ tmp/
 # Local planning / agent docs
 PRD*.md
 AGENTS*.md
+
+# 气泡分割模型（104MB，用户自行下载）
+server/models/

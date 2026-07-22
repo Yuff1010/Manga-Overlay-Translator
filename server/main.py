@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel
 
+from bubble import bubble_boxes, in_bubble
 from ocr import detect_lang, run_ocr
 from translator import list_profiles, translate_texts
 
@@ -54,14 +55,21 @@ def translate(req: TranslateRequest):
     if blocks:
         texts = [b["text"] for b in blocks]
         try:
-            out, usage, error = translate_texts(
+            out, dialog, usage, error = translate_texts(
                 texts, req.target, req.profile, req.model
             )
         except ValueError as e:      # 供应商编号非法
             raise HTTPException(status_code=400, detail=str(e))
         translated = out != texts
-        for b, t in zip(blocks, out):
+        # 气泡增强（可选）：气泡内的文本强制算对白，即使 LLM 判成噪声也保留；
+        # 气泡外的沿用 LLM 判断——旁白天然在气泡外，不能拿气泡当过滤依据。
+        # 没有气泡模型时 boxes 为空，in_bubble 恒 False，退回纯 LLM 判断。
+        boxes = bubble_boxes(arr)
+        # dialogue 标记随块返回，前端据此在"仅对白/全部文字"之间即时切换，
+        # 不必为换个范围重新翻译一遍
+        for b, t, d in zip(blocks, out, dialog):
             b["translation"] = t
+            b["dialogue"] = bool(d) or in_bubble(b, boxes)
     return {
         "width": img.width,
         "height": img.height,

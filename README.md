@@ -4,6 +4,51 @@
 
 适合阅读日文、韩文、英文、西文漫画页面时做即时辅助翻译。当前效果定位是“可读辅助翻译”，不是自动官方汉化。
 
+> 默认只监听 `127.0.0.1`，API Key 只保存在本地服务的 `server/.env`，不会写入用户脚本或网页上下文。
+
+## 效果预览
+
+![Manga Translator 在虚构漫画页上的翻译覆盖效果](docs/images/demo-preview.png)
+
+演示图由本项目专门生成，只用于展示界面和覆盖效果，不包含第三方漫画素材。默认“只翻对白旁白”时，气泡对白会显示译文，拟声词等画面文字会隐藏。
+
+### 控制面板
+
+![Manga Translator 控制面板](docs/images/control-panel.png)
+
+从上到下依次选择：源语言与目标语言、LLM 模型、显示方式、翻译范围和界面语言。面板会显示已处理图片数量及本轮 token 消耗。
+
+## 5 分钟上手
+
+1. 克隆项目并安装后端：
+
+   ```powershell
+   git clone https://github.com/Yuff1010/Manga-Translator.git
+   cd Manga-Translator\server
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   python -m pip install --upgrade pip
+   python -m pip install -r requirements.txt
+   copy .env.example .env
+   ```
+
+   macOS / Linux 请把激活命令换成 `source .venv/bin/activate`，复制配置换成 `cp .env.example .env`。
+
+2. 编辑 `server/.env`，至少填写 `LLM_BASE_URL`、`LLM_API_KEY` 和 `LLM_MODEL`。
+3. 在 `server/` 目录启动服务：
+
+   ```powershell
+   python main.py
+   ```
+
+   浏览器打开 `http://127.0.0.1:8765/ping`，看到 `{"ok": true}` 即表示后端可用。
+
+4. 安装 Tampermonkey，新建脚本，把 [`userscript/ocr-translator.user.js`](userscript/ocr-translator.user.js) 的内容完整粘贴进去并保存。
+5. 打开你有权访问的漫画页面，从 Tampermonkey 菜单选择“打开翻译面板”，设置语言和模型后点“翻译”或“全部”。
+
+后文包含完整安装说明、面板操作、API 字段、GPU 与气泡增强配置。
+
+
 ## 功能
 
 - 支持网页中的 `<img>`、`<canvas>`、CSS 背景图、懒加载图片。
@@ -15,7 +60,8 @@
 - 支持在面板上切换 LLM 供应商和模型，也可手填模型名。
 - 面板显示本轮累计消耗的输入 / 输出 token。
 - 按图片原始坐标返回 OCR 文本框，前端按页面缩放比例定位覆盖层。
-- 支持三种显示方式：译文盖在图片原文位置（通用 / 跟手两种定位方式），或作为普通文字插在图片下方。
+- 支持两种显示方式：译文盖在图片原文位置并逐帧跟随，或作为普通文字插在图片下方。
+- 支持“只翻对白旁白 / 翻译全部文字”即时切换，无需重新 OCR 或翻译。
 - 面板界面支持中文、英文、日文、韩文、西班牙文，首次使用跟随浏览器语言。
 - 译文块支持悬停查看原文，点击临时隐藏译文查看原图。
 - 对超长条漫自动切片，避免 PaddleOCR 缩放后丢字。
@@ -26,12 +72,15 @@
 ```text
 Manga-Translator/
 ├─ README.md
+├─ docs/images/                   # README 原创演示图
 ├─ server/
-│  ├─ main.py              # FastAPI 服务入口
-│  ├─ ocr.py               # PaddleOCR 初始化、切片识别、文本框合并
-│  ├─ translator.py        # OpenAI 兼容 LLM 批量翻译
-│  ├─ requirements.txt     # 后端依赖
-│  └─ .env.example         # 环境变量模板
+│  ├─ main.py                     # FastAPI 服务入口
+│  ├─ ocr.py                      # OCR、切片与文本块合并
+│  ├─ translator.py               # LLM 翻译与对白分类
+│  ├─ bubble.py                   # 可选气泡分割增强
+│  ├─ requirements.txt            # 核心依赖
+│  ├─ requirements-bubble.txt     # 可选气泡增强依赖
+│  └─ .env.example                # 环境变量模板
 └─ userscript/
    └─ ocr-translator.user.js
 ```
@@ -47,7 +96,7 @@ Manga-Translator/
     │
     ├─ PaddleOCR：识别文本和坐标
     ├─ LLM API：批量翻译 OCR 文本
-    └─ 返回图片尺寸、文本框、原文、译文
+    └─ 返回图片尺寸、文本框、原文、译文及对白标记
     │
     ▼
 浏览器覆盖层按图片缩放比例定位译文
@@ -135,25 +184,27 @@ http://127.0.0.1:8765/ping
 
 ## 使用方法
 
-1. 打开一个漫画阅读页面。
-2. 点击浏览器里的 Tampermonkey 图标。
-3. 选择 `漫画图片翻译 (OCRTranslator)` 的菜单项：`🈯 打开翻译面板`。
-4. 在右下角面板里选择源语言和目标语言。面板底部的语言下拉框可切换界面语言
-   （中文 / English / 日本語 / 한국어 / Español），首次打开会跟随浏览器语言。
-5. 点击：
-   - `▶ 翻译`：按需翻译，滚动到图片附近时开始处理。
-   - `⚡ 全部`：立即翻译当前页面所有可识别漫画图片。
+1. 打开一个你有权访问的漫画阅读页面。
+2. 点击浏览器里的 Tampermonkey 图标，选择 `漫画图片翻译 (OCRTranslator)` → `🈯 打开翻译面板`。
+3. 选择源语言和目标语言；不确定源语言时可用“自动检测”，本轮后续图片会复用第一次检测结果。
+4. 选择服务端已配置的 LLM 供应商和模型。这里不会要求输入 API Key；自定义模型只会替换模型名。
+5. 选择翻译范围：
+   - `只翻对白旁白`：默认选项，隐藏音效、拟声词、水印、页码和 OCR 噪声。
+   - `翻译全部文字`：显示后端返回的所有文本块。切换范围不会重新请求后端。
+6. 开始处理：
+   - `▶ 翻译`：按需模式，滚动到图片附近时才开始处理。
+   - `⚡ 全部`：立即处理当前页面所有候选漫画图片。
    - `✖`：清除当前页面译文并重置状态。
-6. 用显示方式下拉框切换译文的呈现形式：
-   - `🖼 盖在图上`：译文覆盖在原文位置，默认方式。
-   - `📄 图下方列出`：译文作为普通文字插在图片下方，随页面排版换行，可选中复制。
-     气泡太窄导致字号被压得很小时，用这个更好读。
+7. 选择显示方式：
+   - `🖼 盖在图上`：译文覆盖在原文位置并逐帧跟随图片移动。
+   - `📄 图下方列出`：译文作为普通文字插在图片下方，可选择复制；气泡太窄时更易读。
+8. 查看结果：
+   - 悬停译文块可查看 OCR 原文。
+   - 点击译文块可临时隐藏 2 秒。
+   - 按反引号键 `` ` `` 可整体显示或隐藏译文。
+   - 面板状态行会显示处理进度、失败原因和本轮 token 用量。
 
-   切换只改变显示方式，不会重新翻译。
-7. 对译文块：
-   - 悬停可查看 OCR 原文。
-   - 点击可临时隐藏 2 秒，方便看原图。
-   - 按键盘反引号键 `` ` `` 可整体显示或隐藏译文。
+显示方式、翻译范围和显隐状态的切换都不会重新 OCR 或翻译。
 
 ## API
 
@@ -199,6 +250,7 @@ http://127.0.0.1:8765/ping
   "height": 1200,
   "lang": "japan",
   "translated": true,
+  "error": "",
   "usage": {
     "prompt_tokens": 80,
     "completion_tokens": 6
@@ -210,13 +262,17 @@ http://127.0.0.1:8765/ping
       "w": 142,
       "h": 103,
       "text": "第3",
-      "translation": "第三"
+      "translation": "第三",
+      "dialogue": true
     }
   ]
 }
 ```
 
 `usage` 统计的是这一张图消耗的 token，失败重试的消耗也计入其中。
+`dialogue` 表示该块是否为对白或旁白正文，用户脚本用它即时切换翻译范围。
+`translated=false` 时仍会返回 OCR 块；`error` 给出翻译失败原因，前端以淡黄色显示回退原文。
+气泡模型、LLM 或可选增强失败都不应丢失已经取得的 OCR 结果。
 
 ### `GET /config`
 
@@ -245,6 +301,28 @@ http://127.0.0.1:8765/ping
 - 返回结果中 `translated` 为 `true`，说明 OCR 和 LLM 翻译链路都走通。
 
 测试结论：项目可以处理真实网页漫画图。日文竖排对白可识别和翻译，但 OCR 结果会混入少量假名标注、噪声字符或拆行文本，LLM 能纠正一部分。当前结果适合辅助阅读，不适合直接作为精修嵌字稿。
+
+## 可选：气泡分割增强
+
+区分「对白」和「画面文字」时，除了让 LLM 判断，还可以用气泡分割模型作为
+**几何软信号**：落在对话气泡内的文本强制保留，气泡外的（旁白、音效、水印）
+仍交给 LLM 判定。这样气泡内的对白即使 LLM 误判也不会被吞掉，同时不会误杀
+天然在气泡外的旁白。
+
+**这是可选增强**，不装也能正常工作（退回纯 LLM 判断）。启用需要两步：
+
+```bash
+python -m pip install -r server/requirements-bubble.txt
+```
+
+从 [kitsumed/yolov8m_seg-speech-bubble](https://huggingface.co/kitsumed/yolov8m_seg-speech-bubble) 下载 `model_dynamic.onnx`（约 104 MB），重命名为 `bubble.onnx` 并放到 `server/models/`。模型文件不会提交到 Git。
+
+重启后端，日志出现 `[bubble] 气泡增强已启用` 即生效。
+
+> 说明：气泡增强对**分页漫画**（日漫单页，气泡密集）最有效，单页开销约 0.2s。
+> **超长条漫默认跳过**——条漫对白多是无框旁白，气泡稀少，而 CPU 上滑窗检测
+> 每张要几秒，不划算。想在条漫上也启用，装 GPU 版 onnxruntime 后调大环境
+> 变量 `BUBBLE_MAX_TILES`。
 
 ## GPU 加速
 
@@ -357,7 +435,7 @@ http://127.0.0.1:8765/ping
 检查 Python 源码语法：
 
 ```bash
-python -c "import ast, pathlib; [ast.parse(pathlib.Path(f).read_text(encoding='utf-8'), filename=f) for f in ['server/main.py','server/ocr.py','server/translator.py']]; print('python syntax ok')"
+python -c "import ast, pathlib; [ast.parse(pathlib.Path(f).read_text(encoding='utf-8'), filename=f) for f in ['server/main.py','server/ocr.py','server/translator.py','server/bubble.py']]; print('python syntax ok')"
 ```
 
 检查用户脚本语法：
@@ -366,6 +444,16 @@ python -c "import ast, pathlib; [ast.parse(pathlib.Path(f).read_text(encoding='u
 node --check userscript/ocr-translator.user.js
 ```
 
+依赖清单校验：
+
+```bash
+python -m pip install -r server/requirements.txt
+```
+
+## 设计参考
+
+README 的“效果展示 → 快速安装 → 完整用法 → 高级配置”组织方式参考了 [zyddnys/manga-image-translator](https://github.com/zyddnys/manga-image-translator)。本项目不是该仓库的复刻：这里采用 Tampermonkey + 本地 FastAPI 服务，把译文实时覆盖在合法访问的网页图片上；没有复制对方的代码、模型或示例漫画图片。
+
 ## 许可与内容来源
 
-请只在你有权访问的漫画页面上使用本工具。测试和开发建议优先使用官方、合法、公开可读的漫画页面。项目不包含任何漫画图片、扫描件或第三方版权内容。
+请只在你有权访问的漫画页面上使用本工具。测试和开发建议优先使用官方、合法、公开可读的漫画页面。项目不包含任何漫画图片、扫描件或第三方版权内容；`docs/images/` 中的演示图为本项目原创生成。

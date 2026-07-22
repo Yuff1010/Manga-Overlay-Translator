@@ -69,10 +69,13 @@ def get_profile(pid: str = ""):
 _no_thinking = {}
 
 SYSTEM_PROMPT = (
-    "你是专业漫画翻译。将 JSON 数组中的每句台词翻译成{target}，"
-    "口语化、简短、符合漫画语气。台词来自同一页漫画，注意上下文连贯。"
-    "OCR 可能有少量错字，按语境纠正。"
-    "只返回与输入等长的 JSON 字符串数组，不要输出任何其他内容。"
+    "你是专业漫画翻译。输入是同一页漫画里 OCR 出来的文本数组。\n"
+    "对每一项输出一个对象 {{\"t\": 译文, \"d\": 1或0}}：\n"
+    "t —— 翻译成{target}，口语化、简短、符合漫画语气；"
+    "同页台词注意上下文连贯，OCR 可能有错字，按语境纠正。\n"
+    "d —— 这一项是不是人物对白或旁白正文。"
+    "是则填 1；音效拟声词、站点水印网址、页码、残缺乱码填 0。\n"
+    "只返回与输入等长的 JSON 数组，不要输出任何其他内容。"
 )
 
 
@@ -122,10 +125,29 @@ def _translate_once(texts, target: str, prof, model: str, usage: dict):
 
     content = body["choices"][0]["message"]["content"].strip()
     result = json.loads(_strip_fence(content))
-    if isinstance(result, list) and len(result) == len(texts):
-        return [str(t) for t in result]
-    got = len(result) if isinstance(result, list) else "非数组"
-    raise ValueError(f"返回条数不符：期望 {len(texts)}，实际 {got}")
+    if not isinstance(result, list) or len(result) != len(texts):
+        got = len(result) if isinstance(result, list) else "非数组"
+        raise ValueError(f"返回条数不符：期望 {len(texts)}，实际 {got}")
+    return _unpack(result, texts)
+
+
+def _unpack(result, texts):
+    """把模型返回拆成 (译文, 是否对白)。
+
+    正常返回 {"t":..., "d":...}；但模型偶尔会退化成纯字符串数组，
+    那时按"全部保留"处理，宁可多显示也不要凭空吞掉台词。
+    """
+    out, dialog = [], []
+    for item, src in zip(result, texts):
+        if isinstance(item, dict):
+            out.append(str(item.get("t", "") or src))
+            flag = item.get("d", 1)
+            # 兼容模型偶尔把数字/布尔值写成字符串；"0" 不能按 Python 真值算 True
+            dialog.append(str(flag).strip().lower() not in {"0", "false", "no", "none", ""})
+        else:
+            out.append(str(item))
+            dialog.append(True)
+    return out, dialog
 
 
 # 这些状态码重试多少次都一样：密钥无效、无权限、地址或模型名不对。
@@ -147,41 +169,44 @@ def _fatal_reason(e):
 
 
 def _translate_chunk(texts, target: str, prof, model: str, usage: dict):
-    """带重试。全部失败才原样返回，保证接口不中断。返回 (译文, 错误说明)。"""
+    """带重试。返回 (译文, 是否对白, 错误说明)。全部失败则原样返回原文。"""
     err = ""
+    keep_all = [True] * len(texts)      # 兜底时不做过滤，免得把台词也吞了
     for i in range(RETRIES):
         try:
-            return _translate_once(texts, target, prof, model, usage), ""
+            out, dialog = _translate_once(texts, target, prof, model, usage)
+            return out, dialog, ""
         except Exception as e:  # noqa: BLE001
             fatal = _fatal_reason(e)
             if fatal:
                 print(f"[translator] {prof['name']} {fatal}，不再重试")
-                return texts, f"{prof['name']}：{fatal}"
+                return texts, keep_all, f"{prof['name']}：{fatal}"
             err = str(e)[:120]
             print(f"[translator] 第 {i + 1}/{RETRIES} 次失败: {e}")
             if i + 1 < RETRIES:
                 time.sleep(1.5 * (i + 1))   # 退避，避开限流
-    return texts, f"{prof['name']}：{err}"
+    return texts, keep_all, f"{prof['name']}：{err}"
 
 
 def translate_texts(texts, target: str = "中文", profile_id: str = "", model: str = ""):
     """整页台词批量翻译，分批进行，某批失败不影响其余批次。
 
-    返回 (译文列表, usage, 错误说明)。usage 用返回值传出而不是记在模块变量上——
-    前端 4 路并发时模块级变量会被互相覆盖。
+    返回 (译文列表, 是否对白列表, usage, 错误说明)。usage 用返回值传出而不是
+    记在模块变量上——前端 4 路并发时模块级变量会被互相覆盖。
     """
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
     prof = get_profile(profile_id)          # 编号非法会抛 ValueError，由上层转成 400
     model = model or prof["models"][0]
     if not prof["api_key"]:
-        return ([f"[未配置 {prof['name']} 的 API_KEY] {t}" for t in texts],
-                usage, f"{prof['name']}：未配置 API_KEY")
-    out, err = [], ""
+        return (list(texts),
+                [True] * len(texts), usage, f"{prof['name']}：未配置 API_KEY")
+    out, dialog, err = [], [], ""
     for i in range(0, len(texts), CHUNK):
-        part, e = _translate_chunk(texts[i : i + CHUNK], target, prof, model, usage)
+        part, dlg, e = _translate_chunk(texts[i : i + CHUNK], target, prof, model, usage)
         out.extend(part)
+        dialog.extend(dlg)
         err = err or e          # 记住第一个错误，够定位问题了
-    return out, usage, err
+    return out, dialog, usage, err
 
 
 def _strip_fence(s: str) -> str:
