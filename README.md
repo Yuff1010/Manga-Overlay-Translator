@@ -1,5 +1,8 @@
 # Manga-Overlay-Translator
 
+[![安装用户脚本](https://img.shields.io/badge/Greasy%20Fork-安装用户脚本-670000?logo=greasyfork&logoColor=white)](https://greasyfork.org/zh-CN/scripts/588293)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 网页漫画 OCR 翻译器。它通过 Tampermonkey 脚本抓取漫画页面图片，把图片发送到本地 Python 服务，使用 PaddleOCR 识别文字位置和内容，再调用 OpenAI 兼容的 LLM 接口翻译，并把译文覆盖回原图对应位置。
 
 适合阅读日文、韩文、英文、西文漫画页面时做即时辅助翻译。当前效果定位是“可读辅助翻译”，不是自动官方汉化。
@@ -185,8 +188,8 @@ http://127.0.0.1:8765/ping
 
 **方式一：从 Greasy Fork 安装（推荐，可自动更新）**
 
-<!-- 发布到 Greasy Fork 后，把下面的链接换成实际地址 -->
-前往脚本页面点击安装即可。以后脚本有更新时 Tampermonkey 会自动提示。
+前往 [Greasy Fork 脚本页面](https://greasyfork.org/zh-CN/scripts/588293)点击安装即可。
+以后脚本有更新时 Tampermonkey 会自动提示。
 
 **方式二：手动粘贴**
 
