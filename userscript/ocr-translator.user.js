@@ -1,8 +1,18 @@
 // ==UserScript==
-// @name         漫画图片翻译 (OCRTranslator)
-// @namespace    ocr-translator
-// @version      0.10.1
-// @description  识别网页漫画图片中的外文，并在原文位置覆盖显示译文（需本地服务）
+// @name         漫画图片翻译 (Manga Translator)
+// @name:en      Manga Translator — OCR + LLM overlay
+// @name:ja      漫画画像翻訳 (Manga Translator)
+// @name:ko      만화 이미지 번역 (Manga Translator)
+// @namespace    https://github.com/Yuff1010/Manga-Translator
+// @version      0.11.0
+// @description  识别网页漫画图片中的外文，在原文位置覆盖显示译文。⚠ 需先在本机运行配套的 OCR + LLM 服务，仅装脚本无法工作。
+// @description:en  Reads text in manga/comic images on any page and overlays the translation in place. ⚠ Requires the companion local OCR + LLM server — the script alone will not work.
+// @description:ja  ウェブ上の漫画画像内の文字を認識し、元の位置に訳文を重ねて表示します。⚠ 別途ローカルの OCR + LLM サーバーが必要です。
+// @description:ko  웹 만화 이미지의 문자를 인식해 원래 위치에 번역문을 표시합니다. ⚠ 로컬 OCR + LLM 서버가 필요합니다.
+// @author       Yuff1010
+// @license      MIT
+// @homepageURL  https://github.com/Yuff1010/Manga-Translator
+// @supportURL   https://github.com/Yuff1010/Manga-Translator/issues
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand

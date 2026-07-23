@@ -181,11 +181,21 @@ http://127.0.0.1:8765/ping
 
 ## 用户脚本安装
 
-1. 安装 [Tampermonkey](https://www.tampermonkey.net/)。
-2. 打开 Tampermonkey 管理面板。
-3. 新建脚本。
-4. 复制 `userscript/ocr-translator.user.js` 的全部内容并保存。
-5. 确认本地后端服务已启动。
+先安装 [Tampermonkey](https://www.tampermonkey.net/)，然后任选一种方式。
+
+**方式一：从 Greasy Fork 安装（推荐，可自动更新）**
+
+<!-- 发布到 Greasy Fork 后，把下面的链接换成实际地址 -->
+前往脚本页面点击安装即可。以后脚本有更新时 Tampermonkey 会自动提示。
+
+**方式二：手动粘贴**
+
+1. 打开 Tampermonkey 管理面板 → 新建脚本
+2. 复制 [`userscript/ocr-translator.user.js`](userscript/ocr-translator.user.js) 的全部内容，粘贴保存
+
+手动安装不会自动更新，仓库里的脚本更新后需要重新粘贴一次。
+
+装好后确认本地后端服务已启动，再打开漫画页面使用。
 
 ## 使用方法
 
