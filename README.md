@@ -1,4 +1,4 @@
-# Manga Translator
+# Manga-Overlay-Translator
 
 网页漫画 OCR 翻译器。它通过 Tampermonkey 脚本抓取漫画页面图片，把图片发送到本地 Python 服务，使用 PaddleOCR 识别文字位置和内容，再调用 OpenAI 兼容的 LLM 接口翻译，并把译文覆盖回原图对应位置。
 
