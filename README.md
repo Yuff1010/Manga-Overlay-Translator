@@ -12,9 +12,10 @@
 
 ![翻译前后对比：左侧英文原页，右侧中文覆盖效果](docs/images/compare-en-zh.png)
 
-对比图中的漫画页由本项目代码绘制，右侧覆盖层使用后端真实返回的坐标与译文生成——
-所见即产品实际效果。注意第二格的音效字 `TAP TAP!` 两侧保持原样：
-它被后端标记为非对白（`dialogue=false`），默认「只翻对白旁白」模式不会覆盖它。
+对比图素材取自 Winsor McCay 的《Little Nemo in Slumberland》（1906 年，
+**公有领域**，来源 Wikimedia Commons）。右侧覆盖层使用后端真实返回的坐标与
+译文生成，未做人工修饰——所见即产品实际效果，包括手写体 OCR 的识别误差由
+LLM 按语境纠正后的结果。
 
 ![Manga Translator 在虚构漫画页上的翻译覆盖效果](docs/images/demo-preview.png)
 
