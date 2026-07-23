@@ -28,8 +28,8 @@ LLM 按语境纠正后的结果。
 1. 克隆项目并安装后端：
 
    ```powershell
-   git clone https://github.com/Yuff1010/Manga-Translator.git
-   cd Manga-Translator\server
+   git clone https://github.com/Yuff1010/Manga-Overlay-Translator.git
+   cd Manga-Overlay-Translator\server
    python -m venv .venv
    .\.venv\Scripts\Activate.ps1
    python -m pip install --upgrade pip
@@ -75,7 +75,7 @@ LLM 按语境纠正后的结果。
 ## 项目结构
 
 ```text
-Manga-Translator/
+Manga-Overlay-Translator/
 ├─ README.md
 ├─ docs/images/                   # README 原创演示图
 ├─ server/
