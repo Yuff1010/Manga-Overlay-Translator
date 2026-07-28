@@ -1,5 +1,7 @@
 # Manga-Overlay-Translator
 
+**简体中文** · [English](README.en.md)
+
 [![安装用户脚本](https://img.shields.io/badge/Greasy%20Fork-安装用户脚本-670000?logo=greasyfork&logoColor=white)](https://greasyfork.org/zh-CN/scripts/588293)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
