@@ -184,6 +184,18 @@ http://127.0.0.1:8765/ping
 
 返回 `{"ok": true}` 即代表服务可用。
 
+## 一键启动（Windows）
+
+装好依赖后，不想每次敲命令的话，双击项目根目录里的脚本即可：
+
+- **`start-server.bat`** — 直接启动后端。自动挑选 Python 解释器（GPU 环境优先），
+  免去手动 `conda activate` 和 `cd`。
+- **`start-gui.bat`** — 打开图形控制台（`server/gui.py`），窗口里可启停后端、
+  切换 GPU/CPU、可视化编辑 `.env` 的 LLM 配置、看实时日志。只依赖 Python 标准库。
+
+脚本用 `%USERPROFILE%` 和相对路径定位环境，无需改动即可使用；找不到 conda 环境
+时会回退到项目内的 `.venv`。macOS / Linux 用户请直接用上文的命令行方式启动。
+
 ## 用户脚本安装
 
 先安装 [Tampermonkey](https://www.tampermonkey.net/)，然后任选一种方式。

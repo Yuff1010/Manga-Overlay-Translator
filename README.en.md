@@ -203,6 +203,21 @@ http://127.0.0.1:8765/ping
 
 `{"ok": true}` means the service is up.
 
+## One-click launch (Windows)
+
+Once dependencies are installed, double-click a script in the project root instead of
+typing commands each time:
+
+- **`start-server.bat`** — starts the backend directly. It auto-picks a Python
+  interpreter (GPU environment first), skipping manual `conda activate` and `cd`.
+- **`start-gui.bat`** — opens a small control panel (`server/gui.py`) where you can
+  start/stop the backend, switch GPU/CPU, edit the LLM config in `.env` visually, and
+  watch live logs. It uses only the Python standard library.
+
+The scripts locate environments via `%USERPROFILE%` and relative paths, so they work
+without edits; if no conda env is found they fall back to the project's `.venv`.
+macOS / Linux users should launch via the command-line steps above.
+
 ## Userscript installation
 
 Install [Tampermonkey](https://www.tampermonkey.net/) first, then pick one option.
