@@ -4,7 +4,7 @@
 // @name:ja      漫画画像翻訳 (Manga Translator)
 // @name:ko      만화 이미지 번역 (Manga Translator)
 // @namespace    https://github.com/Yuff1010/Manga-Overlay-Translator
-// @version      0.11.0
+// @version      0.12.0
 // @description  识别网页漫画图片中的外文，在原文位置覆盖显示译文。⚠ 需先在本机运行配套的 OCR + LLM 服务，仅装脚本无法工作。
 // @description:en  Reads text in manga/comic images on any page and overlays the translation in place. ⚠ Requires the companion local OCR + LLM server — the script alone will not work.
 // @description:ja  ウェブ上の漫画画像内の文字を認識し、元の位置に訳文を重ねて表示します。⚠ 別途ローカルの OCR + LLM サーバーが必要です。
@@ -34,6 +34,10 @@
   const CONCURRENCY = 4;       // 同时翻译几张（后端 OCR 有锁，主要重叠掉 LLM 往返）
   const PRELOAD = '1200px';    // 提前一屏多开始翻译，滚到时通常已就绪
   const CUSTOM = '__custom__';   // 模型下拉里"自定义"那一项的值
+  // 译文大小三档：调覆盖层的字号上限 + 留白。译文超出气泡就选「紧凑」，
+  // 让字更小、框更贴合；想更好读就选「较大」。
+  const FONT_LEVELS = { sm: { max: 20, pad: 2 }, md: { max: 28, pad: 4 }, lg: { max: 40, pad: 7 } };
+  const FONTSIZES = { sm: 'fontSm', md: 'fontMd', lg: 'fontLg' };
 
   // ---------- 界面语言 ----------
 
@@ -61,6 +65,8 @@
       working: '翻译中… 已完成 {0} 张，剩 {1} 张',
       done: '完成 {0} 张', srcIs: '（源语言：{0}）',
       tokens: '　tokens 输入 {0} / 输出 {1}',
+      fromCache: '（其中 {0} 张来自缓存）', restored: '已恢复上次的 {0} 张译文',
+      fontSm: '译文紧凑', fontMd: '译文标准', fontLg: '译文较大',
       untranslated: '，{0} 张翻译失败显示原文', failed: '，失败 {0} 张：{1}',
       tainted: '，{0} 张画布受站点保护读不出',
       notimg: '，{0} 张取回的不是图片（多为防盗链）',
@@ -85,6 +91,8 @@
       working: 'Translating… {0} done, {1} left',
       done: '{0} done', srcIs: ' (source: {0})',
       tokens: '　tokens in {0} / out {1}',
+      fromCache: ' ({0} from cache)', restored: 'Restored {0} image(s) from last time',
+      fontSm: 'Compact text', fontMd: 'Standard text', fontLg: 'Larger text',
       untranslated: ', {0} failed and show original', failed: ', {0} errored: {1}',
       tainted: ', {0} on protected canvas',
       notimg: ', {0} did not return an image (hotlink protection?)',
@@ -111,6 +119,8 @@
       working: '翻訳中… {0} 枚完了、残り {1} 枚',
       done: '{0} 枚完了', srcIs: '（原文: {0}）',
       tokens: '　tokens 入力 {0} / 出力 {1}',
+      fromCache: '（うち {0} 枚はキャッシュ）', restored: '前回の訳文 {0} 枚を復元しました',
+      fontSm: '訳文コンパクト', fontMd: '訳文標準', fontLg: '訳文大きめ',
       untranslated: '、{0} 枚は翻訳失敗で原文表示', failed: '、{0} 枚失敗: {1}',
       tainted: '、{0} 枚はcanvas保護で読めず',
       notimg: '、{0} 枚は画像を取得できず（直リンク制限？）',
@@ -137,6 +147,8 @@
       working: '번역 중… {0}장 완료, {1}장 남음',
       done: '{0}장 완료', srcIs: ' (원문: {0})',
       tokens: '　tokens 입력 {0} / 출력 {1}',
+      fromCache: ' ({0}장 캐시)', restored: '지난번 번역 {0}장 복원됨',
+      fontSm: '번역문 작게', fontMd: '번역문 표준', fontLg: '번역문 크게',
       untranslated: ', {0}장 번역 실패로 원문 표시', failed: ', {0}장 오류: {1}',
       tainted: ', {0}장 canvas 보호로 읽기 불가',
       notimg: ', {0}장 이미지가 아님(핫링크 차단?)',
@@ -163,6 +175,8 @@
       working: 'Traduciendo… {0} listas, faltan {1}',
       done: '{0} listas', srcIs: ' (origen: {0})',
       tokens: '　tokens entrada {0} / salida {1}',
+      fromCache: ' ({0} en caché)', restored: 'Restauradas {0} imagen(es) de antes',
+      fontSm: 'Texto compacto', fontMd: 'Texto estándar', fontLg: 'Texto grande',
       untranslated: ', {0} fallaron y muestran el original',
       failed: ', {0} con error: {1}',
       tainted: ', {0} en canvas protegido',
@@ -214,25 +228,52 @@
   const getTgt = () => GM_getValue('tgt', '中文');
   const getMode = () => GM_getValue('mode', 'overlay');
   const getScope = () => GM_getValue('scope', 'dialogue');
+  const getFont = () => FONT_LEVELS[GM_getValue('fontsize', 'md')] || FONT_LEVELS.md;
 
   // 按需翻译的运行状态
   const q = [];                // 待翻译队列
   const st = {
     running: 0, done: 0, failed: 0, tainted: 0, notimg: 0, untranslated: 0,
-    tokIn: 0, tokOut: 0, lastErr: '', autoLang: '', on: false,
+    cached: 0, tokIn: 0, tokOut: 0, lastErr: '', autoLang: '', on: false,
     // 每次重新开始就 +1。在飞的请求带着旧编号回来时直接丢弃它的计数，
     // 否则「点了✖或重新翻译」后旧请求继续减 running，会出现"剩 -2 张"
     gen: 0,
   };
   const RUN_COUNTERS = {
     done: 0, failed: 0, tainted: 0, notimg: 0, untranslated: 0, lastErr: '',
-    tokIn: 0, tokOut: 0, transErr: '',
+    cached: 0, tokIn: 0, tokOut: 0, transErr: '',
   };
   let io = null;               // 可视区观察器
   let mo = null;               // 监听后续插入的图片
 
   GM_registerMenuCommand(t('menuPanel'), togglePanel);
   GM_registerMenuCommand(t('menuClear'), reset);
+
+  // 刷新/重开页面后自动恢复：这一页翻译过（有缓存）就把译文贴回来、面板自动打开，
+  // 不用手动重新翻译，也不重复请求后端。只恢复缓存，不主动翻新图（不偷偷花钱）。
+  function restore() {
+    let n = 0;
+    for (const el of collect()) {
+      if (el.dataset.ocrt || el.tagName !== 'IMG' || inChrome(el)) continue;
+      const url = imgSrc(el);
+      if (!url) continue;
+      const hit = cacheGet(url);
+      if (hit && hit.blocks && hit.blocks.length) {
+        el.dataset.ocrt = 'done';
+        overlay(el, hit);
+        n++;
+      }
+    }
+    if (n && !panel) {
+      togglePanel();
+      status(t('restored', n));
+    }
+    return n;
+  }
+
+  // 图片常懒加载，DOM 未必一次就绪，隔一会儿再补扫一次
+  setTimeout(restore, 400);
+  setTimeout(restore, 1800);
 
   // ---------- 译文显示/隐藏 ----------
 
@@ -326,6 +367,11 @@
       applyMode();      // 同上：dialogue 标记已经在手，切范围只是显隐
     });
 
+    const font = sel(labeled(FONTSIZES), GM_getValue('fontsize', 'md'), (v) => {
+      GM_setValue('fontsize', v);
+      restyle();        // 字号/留白变了，重排一遍已翻好的，不用重新翻译
+    });
+
     // 界面语言：换了要重建面板，因为每个控件的文案都是创建时定下的
     const ui = sel(UI_LANGS, getUI(), (v) => {
       GM_setValue('ui', v);
@@ -346,7 +392,7 @@
     tip.textContent = t('hint');
     tip.style.cssText = 'opacity:.6;font-size:12px;word-break:break-word;white-space:normal;';
 
-    panel.append(row, llmRow, mode, scope, ui, btns, hide, tip);
+    panel.append(row, llmRow, mode, scope, font, ui, btns, hide, tip);
     document.body.appendChild(panel);
     toggleHide(hidden);   // 同步按钮文案到当前状态
     loadModels(llmRow);
@@ -602,7 +648,19 @@
   async function handle(el, gen) {
     el.dataset.ocrt = 'doing';
     el.style.outline = '3px solid #f90';
+    const url = el.tagName === 'IMG' ? imgSrc(el) : '';
     try {
+      // 先查缓存：刷新或重看时，已翻过的图直接贴回，不请求后端、不花 token
+      const hit = url ? cacheGet(url) : null;
+      if (hit && hit.blocks && hit.blocks.length) {
+        if (gen !== st.gen) return;
+        el.dataset.ocrt = 'done';
+        overlay(el, hit);
+        if (hit.translated === false) st.untranslated++;
+        st.done++;
+        st.cached++;
+        return;
+      }
       const dataUrl = await grab(el);
       const res = await postJSON(SERVER + '/translate', {
         image: dataUrl,
@@ -621,7 +679,16 @@
       }
       if (gen !== st.gen) return;      // 这轮已经作废，别把结果画上去
       el.dataset.ocrt = 'done';
-      if (res.blocks && res.blocks.length) overlay(el, res);
+      if (res.blocks && res.blocks.length) {
+        overlay(el, res);
+        // 存缓存（只留渲染需要的字段），下次刷新直接用
+        if (url) {
+          cachePut(url, {
+            width: res.width, height: res.height, blocks: res.blocks,
+            translated: res.translated, error: res.error,
+          });
+        }
+      }
       if (res.blocks && res.blocks.length && res.translated === false) {
         st.untranslated++;
         if (res.error) st.transErr = res.error;   // 后端给的具体原因
@@ -719,6 +786,7 @@
     const left = q.length + st.running;
     if (left) return status(t('working', st.done, left));
     let msg = t('done', st.done);
+    if (st.cached) msg += t('fromCache', st.cached);
     if (st.autoLang) msg += t('srcIs', langName(st.autoLang));
     if (st.tokIn || st.tokOut) msg += t('tokens', kilo(st.tokIn), kilo(st.tokOut));
     if (st.untranslated) {
@@ -923,19 +991,28 @@
     ov.style.height = h + 'px';
     const sx = w / data.width;
     const sy = h / data.height;
+    const pad = getFont().pad;      // 覆盖层向外扩一点，给译文（尤其中文偏长）留空间
     // 先摆好位置和方向，字号留到后面统一决定
     for (const el of ov.children) {
       const b = data.blocks[el.dataset.i];
-      const w = b.w * sx;
-      const h = b.h * sy;
-      el.style.left = b.x * sx + 'px';
-      el.style.top = b.y * sy + 'px';
-      el.style.width = w + 'px';
-      el.style.height = h + 'px';
+      const bw = b.w * sx + pad * 2;
+      const bh = b.h * sy + pad * 2;
+      el.style.left = b.x * sx - pad + 'px';
+      el.style.top = b.y * sy - pad + 'px';
+      el.style.width = bw + 'px';
+      el.style.height = bh + 'px';
       // 竖长气泡（日漫竖排）→ 译文竖排更贴合
-      el.style.writingMode = h > w * 1.6 ? 'vertical-rl' : 'horizontal-tb';
+      el.style.writingMode = bh > bw * 1.6 ? 'vertical-rl' : 'horizontal-tb';
     }
     unifyFont(ov);
+  }
+
+  /** 字号档位变了：重排所有已翻好的覆盖层，不重新请求后端 */
+  function restyle() {
+    for (const t of tracked) {
+      t.key = '';       // 强制 position 重算
+      position(t);
+    }
   }
 
   /**
@@ -956,7 +1033,7 @@
   /** 二分找这个块能容纳的最大字号（用实际渲染结果判断，不靠估算） */
   function maxFit(el) {
     let lo = MIN_FONT;
-    let hi = MAX_FONT;
+    let hi = getFont().max;
     let best = MIN_FONT;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
@@ -970,6 +1047,62 @@
       }
     }
     return best;
+  }
+
+  // ---------- 翻译缓存 ----------
+  // 按图片 URL 缓存翻译结果，刷新页面后直接贴回，已翻过的图不再请求后端
+  // （省钱又秒出）。存 localStorage：按域名隔离，正好每个漫画站各自一份。
+
+  const CACHE_PREFIX = 'ocrt:c:';
+  const CACHE_MAX = 600;        // 最多缓存多少张图，超了删最老的
+
+  /** URL → 短 key（djb2 哈希，避免 key 过长） */
+  function cacheKey(url) {
+    let h = 5381;
+    for (let i = 0; i < url.length; i++) h = ((h << 5) + h + url.charCodeAt(i)) | 0;
+    return CACHE_PREFIX + (h >>> 0).toString(36);
+  }
+
+  function cacheGet(url) {
+    try {
+      const s = localStorage.getItem(cacheKey(url));
+      if (!s) return null;
+      const o = JSON.parse(s);
+      return o && o.d ? o.d : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function cachePut(url, data) {
+    const rec = JSON.stringify({ t: Date.now(), d: data });
+    try {
+      localStorage.setItem(cacheKey(url), rec);
+    } catch (e) {
+      // 容量满：清掉一批最老的本插件条目再重试一次
+      pruneCache(Math.ceil(CACHE_MAX / 4));
+      try {
+        localStorage.setItem(cacheKey(url), rec);
+      } catch (e2) {}
+    }
+    if (Math.random() < 0.05) pruneCache(0);   // 偶尔顺手控制总量
+  }
+
+  /** 删掉最老的若干条；n=0 时只在超过 CACHE_MAX 时裁到上限 */
+  function pruneCache(n) {
+    const items = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(CACHE_PREFIX)) {
+        let t = 0;
+        try { t = (JSON.parse(localStorage.getItem(k)) || {}).t || 0; } catch (e) {}
+        items.push([k, t]);
+      }
+    }
+    const over = n || Math.max(0, items.length - CACHE_MAX);
+    if (over <= 0) return;
+    items.sort((a, b) => a[1] - b[1]);          // 最老在前
+    for (let i = 0; i < over && i < items.length; i++) localStorage.removeItem(items[i][0]);
   }
 
   // ---------- 工具 ----------
