@@ -72,6 +72,8 @@
       notimg: '，{0} 张取回的不是图片（多为防盗链）',
       cleared: '已清除，可重新翻译', detected: '检测到源语言：{0}',
       tipFailed: '翻译失败，显示的是原文：',
+      btnRetryFail: '重试失败', retrying: '重试 {0} 张失败图片…', noFailed: '没有失败的图片可重试',
+      btnCopy: '复制译文', copied: '已复制 {0} 条译文', copyEmpty: '本页还没有译文',
       errServer: '无法连接本地服务，请确认已启动 server',
       errTimeout: '请求超时', errNoUrl: '找不到图片地址', errHttp: '图片请求 HTTP {0}',
     },
@@ -98,6 +100,8 @@
       notimg: ', {0} did not return an image (hotlink protection?)',
       cleared: 'Cleared — you can translate again', detected: 'Detected source: {0}',
       tipFailed: 'Translation failed, showing original: ',
+      btnRetryFail: 'Retry failed', retrying: 'Retrying {0} failed images…', noFailed: 'No failed images to retry',
+      btnCopy: 'Copy translations', copied: 'Copied {0} translations', copyEmpty: 'No translations on this page yet',
       errServer: 'Cannot reach local server — is it running?',
       errTimeout: 'Request timed out', errNoUrl: 'No image URL found',
       errHttp: 'Image request HTTP {0}',
@@ -126,6 +130,8 @@
       notimg: '、{0} 枚は画像を取得できず（直リンク制限？）',
       cleared: '消去しました。再翻訳できます', detected: '原文の言語: {0}',
       tipFailed: '翻訳失敗、原文を表示: ',
+      btnRetryFail: '失敗を再試行', retrying: '失敗した {0} 枚を再試行…', noFailed: '再試行する失敗画像はありません',
+      btnCopy: '訳文をコピー', copied: '{0} 件の訳文をコピーしました', copyEmpty: 'このページに訳文はありません',
       errServer: 'ローカルサーバに接続できません',
       errTimeout: 'タイムアウト', errNoUrl: '画像URLが見つかりません',
       errHttp: '画像リクエスト HTTP {0}',
@@ -154,6 +160,8 @@
       notimg: ', {0}장 이미지가 아님(핫링크 차단?)',
       cleared: '지웠습니다. 다시 번역할 수 있습니다', detected: '원문 언어: {0}',
       tipFailed: '번역 실패, 원문 표시: ',
+      btnRetryFail: '실패 재시도', retrying: '실패한 {0}장 재시도…', noFailed: '재시도할 실패 이미지가 없습니다',
+      btnCopy: '번역 복사', copied: '{0}건 번역 복사됨', copyEmpty: '이 페이지에 번역이 없습니다',
       errServer: '로컬 서버에 연결할 수 없습니다',
       errTimeout: '요청 시간 초과', errNoUrl: '이미지 주소를 찾을 수 없음',
       errHttp: '이미지 요청 HTTP {0}',
@@ -184,6 +192,8 @@
       cleared: 'Borrado — puedes traducir de nuevo',
       detected: 'Idioma detectado: {0}',
       tipFailed: 'Fallo la traducción, se muestra el original: ',
+      btnRetryFail: 'Reintentar fallos', retrying: 'Reintentando {0} imágenes fallidas…', noFailed: 'No hay imágenes fallidas que reintentar',
+      btnCopy: 'Copiar traducciones', copied: 'Copiadas {0} traducciones', copyEmpty: 'No hay traducciones en esta página',
       errServer: 'No se conecta al servidor local',
       errTimeout: 'Tiempo agotado', errNoUrl: 'No se encontró la URL de la imagen',
       errHttp: 'Petición de imagen HTTP {0}',
@@ -224,8 +234,24 @@
   /** 语言代码 → 当前界面语言下的显示名 */
   const langName = (c) => (SRC_LANGS[c] ? t(SRC_LANGS[c]) : c);
 
-  const getSrc = () => GM_getValue('src', 'japan');
-  const getTgt = () => GM_getValue('tgt', '中文');
+  // 按域名记忆语言/模型偏好：不同漫画站点（日漫/韩漫）语言不同，按站点各自记住。
+  // 读时先查域名专属 key，没有就回退全局（首次访问新站点带出通用设置）；
+  // 写时同步全局，让全局 key 成为新站点的默认种子。
+  // 只对语言/模型类偏好（src/tgt/llm/llmCustom）按域名分；mode/scope/fontsize/ui
+  // 是显示偏好，跨站点保持一致更顺手，不做域名隔离。
+  const HOST = location.hostname || 'localhost';
+  const dk = (key) => key + '@' + HOST;
+  const getPref = (key, def) => {
+    const v = GM_getValue(dk(key));
+    return v !== undefined && v !== null && v !== '' ? v : GM_getValue(key, def);
+  };
+  const setPref = (key, val) => {
+    GM_setValue(dk(key), val);
+    GM_setValue(key, val); // 同步全局：作为下次新站点的回退默认
+  };
+
+  const getSrc = () => getPref('src', 'japan');
+  const getTgt = () => getPref('tgt', '中文');
   const getMode = () => GM_getValue('mode', 'overlay');
   const getScope = () => GM_getValue('scope', 'dialogue');
   const getFont = () => FONT_LEVELS[GM_getValue('fontsize', 'md')] || FONT_LEVELS.md;
@@ -342,19 +368,26 @@
 
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;gap:7px;';
-    const src = sel(labeled(SRC_LANGS), getSrc(), (v) => GM_setValue('src', v));
+    const src = sel(labeled(SRC_LANGS), getSrc(), (v) => setPref('src', v));
     const arrow = document.createElement('span');
     arrow.textContent = '→';
     arrow.style.cssText = 'opacity:.65;flex:none;';
-    const tgt = sel(labeled(TARGETS), getTgt(), (v) => GM_setValue('tgt', v));
+    const tgt = sel(labeled(TARGETS), getTgt(), (v) => setPref('tgt', v));
     row.append(src, arrow, tgt);
 
     const btns = document.createElement('div');
-    btns.style.cssText = 'display:flex;gap:6px;';
+    btns.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
     btns.append(
       btn(t('btnTranslate'), '#2d7d46', () => start()),
       btn(t('btnAll'), '#3a6ea5', () => start(true)),
       btn(t('btnClear'), '#7a3030', reset)
+    );
+
+    const btns2 = document.createElement('div');
+    btns2.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
+    btns2.append(
+      btn(t('btnRetryFail'), '#8a6d3b', retryFailed),
+      btn(t('btnCopy'), '#4a4a6a', copyPage)
     );
 
     const mode = sel(labeled(MODES), getMode(), (v) => {
@@ -392,7 +425,7 @@
     tip.textContent = t('hint');
     tip.style.cssText = 'opacity:.6;font-size:12px;word-break:break-word;white-space:normal;';
 
-    panel.append(row, llmRow, mode, scope, font, ui, btns, hide, tip);
+    panel.append(row, llmRow, mode, scope, font, ui, btns, btns2, hide, tip);
     document.body.appendChild(panel);
     toggleHide(hidden);   // 同步按钮文案到当前状态
     loadModels(llmRow);
@@ -410,22 +443,22 @@
         }
         opts[CUSTOM] = t('customModel');
 
-        const cur = GM_getValue('llm', '');
+        const cur = getPref('llm', '');
         const picked = opts[cur] ? cur : Object.keys(opts)[0];
         const s = sel(opts, picked, (v) => {
-          GM_setValue('llm', v);
+          setPref('llm', v);
           custom.style.display = v === CUSTOM ? '' : 'none';
         });
 
         // 自定义：沿用所选供应商的接口和密钥，只把模型名换掉
         const custom = document.createElement('input');
         custom.placeholder = t('customHint');
-        custom.value = GM_getValue('llmCustom', '');
+        custom.value = getPref('llmCustom', '');
         custom.style.cssText =
           'background:#333;color:#eee;border:1px solid #555;border-radius:5px;' +
           'padding:4px 6px;font:13px system-ui,"Microsoft YaHei","Malgun Gothic","Yu Gothic",sans-serif;outline:none;';
         custom.addEventListener('change', () =>
-          GM_setValue('llmCustom', custom.value.trim())
+          setPref('llmCustom', custom.value.trim())
         );
         custom.style.display = picked === CUSTOM ? '' : 'none';
 
@@ -438,11 +471,11 @@
 
   /** 当前选中的供应商和模型 */
   function getLLM() {
-    const v = GM_getValue('llm', '');
+    const v = getPref('llm', '');
     if (!v) return {};
     if (v === CUSTOM) {
       // 自定义模型挂在第一个供应商下；服务端拿到空 profile 会用默认那组
-      return { model: GM_getValue('llmCustom', '') };
+      return { model: getPref('llmCustom', '') };
     }
     const [profile, model] = v.split('::');
     return { profile, model };
@@ -669,6 +702,7 @@
         target: getTgt(),
         ...getLLM(),
       });
+      if (gen !== st.gen) return;      // 这轮已作废：不画结果、不动本轮统计
       if (res.usage) {
         st.tokIn += res.usage.prompt_tokens || 0;
         st.tokOut += res.usage.completion_tokens || 0;
@@ -677,7 +711,6 @@
         st.autoLang = res.lang;
         status(t('detected', langName(res.lang)));
       }
-      if (gen !== st.gen) return;      // 这轮已经作废，别把结果画上去
       el.dataset.ocrt = 'done';
       if (res.blocks && res.blocks.length) {
         overlay(el, res);
@@ -818,6 +851,129 @@
       delete el.dataset.ocrtWatch;
     }
     status(t('cleared'));
+  }
+
+  /** 只重试失败的图：清掉它们的失败缓存和状态标记，重新入队。
+   *  和 start(false) 的区别：不重置整轮计数（done/failed 等保留），
+   *  只针对 data-ocrt="fail" 的图。用户可在点之前先换模型/语言，达到"换模型重试"。
+   *  untranslated（翻译了但 translated=false）的图缓存了失败结果，也要清缓存。
+   */
+  function retryFailed() {
+    const fails = document.querySelectorAll('[data-ocrt="fail"]');
+    // translated=false 的图状态是 done，但覆盖层标了淡黄——也值得重试。
+    // 靠 tracked 里的 data.translated === false 找到它们，清缓存后重置状态。
+    let untranslatedImgs = [];
+    for (const e of tracked) {
+      if (e.data && e.data.translated === false && e.img) {
+        const url = e.img.tagName === 'IMG' ? imgSrc(e.img) : '';
+        if (url) cacheDel(url);
+        untranslatedImgs.push(e.img);
+      }
+    }
+    const n = fails.length + untranslatedImgs.length;
+    if (!n) { status(t('noFailed')); return; }
+
+    // 清失败图的缓存（有 URL 才有缓存；canvas/blob 取不到 URL 的本就没缓存）
+    for (const el of fails) {
+      const url = el.tagName === 'IMG' ? imgSrc(el) : '';
+      if (url) cacheDel(url);
+    }
+    // 移除这些图的旧覆盖层/列表，重置状态标记准备重新翻译
+    const allRetry = [...fails, ...untranslatedImgs];
+    const toRemove = new Set(allRetry);
+    for (let i = tracked.length - 1; i >= 0; i--) {
+      if (toRemove.has(tracked[i].img)) {
+        if (tracked[i].ov) tracked[i].ov.remove();
+        if (tracked[i].list) tracked[i].list.remove();
+        tracked.splice(i, 1);
+      }
+    }
+    for (const el of allRetry) {
+      delete el.dataset.ocrt;
+      delete el.dataset.ocrtWatch;
+    }
+    st.gen++;  // 作废上一轮还在飞的请求
+    if (!st.on) {
+      st.on = true;
+      io = new IntersectionObserver(onSee, { rootMargin: PRELOAD });
+      // 和 start() 一致：广告位频繁改 DOM 时加防抖，避免每次变动全量扫描
+      let dbTimer = null;
+      mo = new MutationObserver(() => {
+        clearTimeout(dbTimer);
+        dbTimer = setTimeout(() => scan(false), 300);
+      });
+      mo.observe(document.body, { childList: true, subtree: true });
+    }
+    // 入队：这些图可能不在可视区，直接 enqueue 让 pump 处理
+    for (const el of allRetry) {
+      if (!inChrome(el)) enqueue(el);
+    }
+    status(t('retrying', n));
+    report();
+  }
+
+  /**
+   * 收集本页所有可复制的译文数据。
+   * tracked 里有当前已渲染的（含覆盖层/列表）；但翻页阅读器会把上一页的条目
+   * 从 tracked 移除——它们的译文仍缓存在 localStorage 里。这里把两份合并，
+   * 让「复制译文」在翻过页之后也能拿到之前翻好的内容。
+   */
+  function collectTranslatable() {
+    const seen = new Set();     // 按图片 URL 去重（tracked + 缓存可能重叠）
+    const out = [];
+    // 1) 当前 tracked 里的
+    for (const e of tracked) {
+      if (!e.data || !e.data.blocks) continue;
+      const k = e.src || srcOf(e.img);
+      if (k) seen.add(k);
+      out.push(e.data);
+    }
+    // 2) 页面上的图但已移出 tracked（翻页/重排），从缓存取
+    for (const el of collect()) {
+      if (el.tagName !== 'IMG') continue;
+      const url = imgSrc(el);
+      if (!url || seen.has(url)) continue;
+      const hit = cacheGet(url);
+      if (hit && hit.blocks && hit.blocks.length) {
+        seen.add(url);
+        out.push(hit);
+      }
+    }
+    return out;
+  }
+
+  /** 复制本页所有译文到剪贴板。每条一行，格式：原文 → 译文（翻译成功时）。
+   *  overlay 模式下文字不可选中，这是唯一的批量导出途径。
+   */
+  function copyPage() {
+    const lines = [];
+    for (const data of collectTranslatable()) {
+      if (!data.blocks) continue;
+      for (const b of data.blocks) {
+        if (b.dialogue === false && getScope() === 'dialogue') continue;
+        const trans = b.translation || '';
+        if (trans && trans !== b.text) {
+          lines.push(b.text + ' → ' + trans);
+        } else if (trans) {
+          lines.push(trans);
+        }
+      }
+    }
+    if (!lines.length) { status(t('copyEmpty')); return; }
+    const text = lines.join('\n');
+    navigator.clipboard.writeText(text).then(() => {
+      status(t('copied', lines.length));
+    }).catch(() => {
+      // clipboard API 在非 HTTPS / 非 Tampermonkey 环境可能不可用，退回 execCommand
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;top:-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); status(t('copied', lines.length)); }
+      catch (e2) { status(t('copyEmpty')); }
+      ta.remove();
+    });
   }
 
   // ---------- 渲染 ----------
@@ -1086,6 +1242,11 @@
       } catch (e2) {}
     }
     if (Math.random() < 0.05) pruneCache(0);   // 偶尔顺手控制总量
+  }
+
+  /** 删掉某张图的缓存——重试失败图时必须先清，否则直接命中缓存的失败结果 */
+  function cacheDel(url) {
+    try { localStorage.removeItem(cacheKey(url)); } catch (e) {}
   }
 
   /** 删掉最老的若干条；n=0 时只在超过 CACHE_MAX 时裁到上限 */

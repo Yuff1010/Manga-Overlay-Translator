@@ -8,6 +8,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# .env 的 mtime 缓存：超过这个时间就重新读一遍配置，省得改了 .env 还要重启服务。
+# getmtime 在文件缺失时抛 OSError，做一层兜底；失败就退回"每次都重载"。
+_ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+_env_mtime = 0.0
+_profiles = []
+
 def _load_profiles():
     """读取 .env 里的若干组供应商配置。
 
@@ -45,21 +51,39 @@ def _load_profiles():
     return out
 
 
-PROFILES = _load_profiles()
+def get_profiles():
+    """返回当前供应商配置列表。.env 变了会自动重载，不用重启服务。
+
+    用模块级 _profiles + mtime 比对实现惰性重载：每次调用先看 .env 的 mtime，
+    没变就直接返回缓存；变了才重新 _load_profiles()。load_dotenv() 必须重跑，
+    否则 os.getenv 读到的还是启动时缓存的旧值。
+    """
+    global _profiles, _env_mtime
+    try:
+        m = os.path.getmtime(_ENV_FILE)
+    except OSError:
+        m = 0.0
+    if m != _env_mtime or not _profiles:
+        if m:
+            load_dotenv(override=True)   # 重新读盘覆盖 os.environ
+        _profiles = _load_profiles()
+        _env_mtime = m
+    return _profiles
 
 
 def list_profiles():
     """供 /config 用。刻意不返回 api_key——它不该离开服务端。"""
-    return [{"id": p["id"], "name": p["name"], "models": p["models"]} for p in PROFILES]
+    return [{"id": p["id"], "name": p["name"], "models": p["models"]} for p in get_profiles()]
 
 
 def get_profile(pid: str = ""):
+    profs = get_profiles()
     if not pid:
-        return PROFILES[0]
-    for p in PROFILES:
+        return profs[0]
+    for p in profs:
         if p["id"] == pid:
             return p
-    raise ValueError(f"没有编号为 {pid} 的供应商配置，可用：{[p['id'] for p in PROFILES]}")
+    raise ValueError(f"没有编号为 {pid} 的供应商配置，可用：{[p['id'] for p in profs]}")
 
 
 # 推理型模型（如 deepseek-v4-flash）默认会为每句台词消耗上千 reasoning token，
@@ -117,13 +141,25 @@ def _translate_once(texts, target: str, prof, model: str, usage: dict):
         print(f"[translator] {prof['name']} 不支持 thinking 参数，已退回普通模式")
         resp = _post(texts, target, prof, model, False)
     resp.raise_for_status()
-    body = resp.json()
+    try:
+        body = resp.json()
+    except ValueError:
+        # 中转/代理偶尔返回 HTML 错误页或空 body；不拦的话 json.loads 抛出的
+        # 原始信息很难看，且会被外层当成可重试错误白白重试三轮
+        raise ValueError(f"返回不是合法 JSON（HTTP {resp.status_code}）：{resp.text[:120]}")
     u = body.get("usage") or {}
     # 失败重试也算钱，所以拿到响应就累加，不等成功与否
     usage["prompt_tokens"] += int(u.get("prompt_tokens") or 0)
     usage["completion_tokens"] += int(u.get("completion_tokens") or 0)
 
-    content = body["choices"][0]["message"]["content"].strip()
+    choices = body.get("choices") or []
+    if not choices:
+        # 出错时有些接口返回 {"error": ...} 却带 200，直接 KeyError 会很迷惑
+        raise ValueError(f"响应缺少 choices 字段：{str(body)[:120]}")
+    content = (choices[0].get("message") or {}).get("content") or ""
+    content = content.strip()
+    if not content:
+        raise ValueError("模型返回了空内容")
     result = json.loads(_strip_fence(content))
     if not isinstance(result, list) or len(result) != len(texts):
         got = len(result) if isinstance(result, list) else "非数组"

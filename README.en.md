@@ -80,6 +80,9 @@ GPU / bubble-enhancement configuration.
 - Whole-page translation: processes every manga image found on the current page.
 - Source language: auto-detect, Japanese, Korean, English, Spanish, Chinese.
 - Target language: Chinese, English, Japanese, Korean.
+- Language and model preferences are remembered per domain: each site recalls its
+  last choice (first visit falls back to the global default). Display preferences
+  (mode, scope, font size, UI language) are shared globally.
 - Switch LLM provider and model from the panel, or type a model name by hand.
 - The panel shows cumulative input / output tokens for the current run.
 - OCR text boxes are returned in original-image coordinates; the frontend scales
@@ -189,6 +192,9 @@ API keys stay on the server. The userscript is injected on every page via
 any site, so the panel only switches between provider groups pre-configured on
 the server and never accepts a key.
 
+No restart needed after editing `.env`: the backend detects the file change by
+modification time and reloads on the next `/config` or `/translate` request.
+
 Start the service:
 
 ```bash
@@ -253,6 +259,11 @@ Once installed, make sure the local backend is running, then open a manga page.
 6. Start processing:
    - `Translate`: on-demand mode, begins when you scroll near an image.
    - `All`: immediately processes every candidate manga image on the page.
+   - `Retry failed`: re-queues only images that failed (errored or fell back to
+     original text). Switch provider/model first to retry with a different one.
+   - `Copy translations`: copies all translations on the current page to the
+     clipboard (one per line, "source → translation"). In overlay mode text is
+     not selectable, so this is the only way to export.
    - `Clear`: removes overlays on the current page and resets state.
 7. Choose the display mode:
    - `Overlay on image`: covers the original position and follows the image every frame.
@@ -267,6 +278,12 @@ Once installed, make sure the local backend is running, then open a manga page.
 Switching display mode, scope, or visibility never triggers re-OCR or re-translation.
 
 ## API
+
+### `GET /` (status page)
+
+Open `http://127.0.0.1:8765/` in a browser for a local status page: backend
+health, loaded OCR models, LLM config summary (no keys shown), one-click
+userscript install, and common-issue self-check.
 
 ### `GET /ping`
 
@@ -349,6 +366,20 @@ response never contains API keys.
   "default": { "profile": "1", "model": "deepseek-chat" }
 }
 ```
+
+### `GET /ocr-status`
+
+Returns loaded (warmed-up) OCR language models and their instance counts, for
+the status page.
+
+```json
+{ "models": { "japan": 2 } }
+```
+
+### `GET /userscript`
+
+Returns the userscript source (`text/javascript`). With Tampermonkey installed,
+visiting this URL triggers the `.user.js` install prompt.
 
 ## Real-page test log
 

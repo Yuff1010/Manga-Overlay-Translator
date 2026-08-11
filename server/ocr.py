@@ -106,11 +106,31 @@ class _Pool:
             return self.free.get_nowait()
         except queue.Empty:
             pass
+        # 实例按需创建。_new_ocr 可能耗时且会下载模型，不能在锁内做——
+        # 否则一种语言的池在建实例时，其它语言连 acquire 已有实例都被阻塞。
+        # 但为了不超额创建，先在锁内占一个名额（made+=1），建失败就回滚。
         with self.lock:
             if self.made < POOL_SIZE:
                 self.made += 1
+                slot_taken = True
+            else:
+                slot_taken = False
+        if slot_taken:
+            try:
                 return _new_ocr(self.lang)
-        return self.free.get()      # 都在忙，等一个空闲的
+            except Exception:
+                # 模型下载失败/OOM 等：回滚名额，否则池容量会悄悄缩水，
+                # 后续永远补不回来，最终 made 恒等于 POOL_SIZE 却无可用实例
+                with self.lock:
+                    self.made -= 1
+                raise
+        # 名额已满，等一个空闲的。给超时而不是无限阻塞：万一某次推理
+        # 异常导致 release 没执行（虽然 _ocr_lines 用了 finally），或者
+        # 所有实例都卡在慢请求上，无限阻塞会让整个服务僵死。
+        try:
+            return self.free.get(timeout=300)
+        except queue.Empty:
+            raise RuntimeError("OCR 实例池繁忙，等待超时（300s），可能有线程异常未释放实例")
 
     def release(self, inst):
         self.free.put(inst)
@@ -125,6 +145,16 @@ def _get_pool(lang: str) -> _Pool:
         if lang not in _pools:
             _pools[lang] = _Pool(lang)
         return _pools[lang]
+
+
+def pool_status():
+    """供状态页用：返回已加载（预热过）的语言模型及其实例数。
+
+    模型按需创建：第一次跑某种语言才会下载。列表为空说明还没翻译过任何图，
+    不能断定 OCR 是否可用——那要实际跑一次才知道。
+    """
+    with _pools_lock:
+        return {lang: p.made for lang, p in _pools.items()}
 
 
 def _ocr_lines(img, lang: str):

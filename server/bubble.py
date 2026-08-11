@@ -12,6 +12,7 @@
 import math
 import os
 import threading
+import time
 
 import numpy as np
 
@@ -29,7 +30,12 @@ MAX_TILES = int(os.getenv("BUBBLE_MAX_TILES", "3"))
 _sess = None
 _tried = False
 _lock = threading.Lock()
-_failed = False
+# 推理失败后冷却一段时间再重试，而不是永久关闭。单张图尺寸异常、瞬时
+# 内存压力都可能造成一次性失败，永久禁用过于激进。None = 未冷却。
+_failed_until = None
+# 冷却时长（秒）。设得较长是为了避免在持续故障（如模型损坏）上反复重试
+# 空耗；用户重启服务即可彻底重置。
+FAIL_COOLDOWN = 300
 
 
 def _session():
@@ -104,14 +110,15 @@ def _detect_one(sess, name, tile, y_off):
 
 def bubble_boxes(img):
     """安全检测对话气泡；可选模块的任何故障都降级为空结果。"""
-    global _failed
-    if _failed:
+    global _failed_until
+    # 在冷却期内直接返回空，跳过推理；冷却到期后自动恢复正常尝试。
+    if _failed_until and time.monotonic() < _failed_until:
         return []
     try:
         return _bubble_boxes(img)
     except Exception as e:  # 推理输入/输出不兼容时仍须返回 OCR 与译文
-        _failed = True
-        print(f"[bubble] 气泡推理失败，增强关闭：{e}")
+        _failed_until = time.monotonic() + FAIL_COOLDOWN
+        print(f"[bubble] 气泡推理失败，冷却 {FAIL_COOLDOWN}s 后重试：{e}")
         return []
 
 
