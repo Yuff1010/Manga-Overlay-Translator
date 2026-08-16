@@ -4,7 +4,7 @@
 // @name:ja      漫画画像翻訳 (Manga Translator)
 // @name:ko      만화 이미지 번역 (Manga Translator)
 // @namespace    https://github.com/Yuff1010/Manga-Overlay-Translator
-// @version      0.12.0
+// @version      0.13.0
 // @description  识别网页漫画图片中的外文，在原文位置覆盖显示译文。⚠ 需先在本机运行配套的 OCR + LLM 服务，仅装脚本无法工作。
 // @description:en  Reads text in manga/comic images on any page and overlays the translation in place. ⚠ Requires the companion local OCR + LLM server — the script alone will not work.
 // @description:ja  ウェブ上の漫画画像内の文字を認識し、元の位置に訳文を重ねて表示します。⚠ 別途ローカルの OCR + LLM サーバーが必要です。
@@ -76,6 +76,17 @@
       btnCopy: '复制译文', copied: '已复制 {0} 条译文', copyEmpty: '本页还没有译文',
       errServer: '无法连接本地服务，请确认已启动 server',
       errTimeout: '请求超时', errNoUrl: '找不到图片地址', errHttp: '图片请求 HTTP {0}',
+      menuOnboard: '后端连接向导',
+      obTitle: 'Manga Translator 初始化',
+      obChecking: '正在检测本地后端…',
+      obOk: '后端已连接 ✓',
+      obOkTip: '一切就绪。右下角面板可开始翻译，翻到哪翻到哪。',
+      obFail: '连不上本地后端（127.0.0.1:8765），请按以下步骤启动：',
+      obStep1: '1. 运行后端控制台 server/gui.py，或命令行：cd server && python main.py',
+      obStep2: '2. 浏览器打开 http://127.0.0.1:8765 确认状态页正常',
+      obStep3: '3. 回到本页点「重新检测」',
+      obRetry: '重新检测', obLater: '稍后再说', obOpen: '打开翻译面板',
+      serverDown: '无法连接后端，可从油猴菜单打开「后端连接向导」',
     },
     en: {
       lAuto: 'Auto-detect', lJa: 'Japanese', lKo: 'Korean', lEn: 'English',
@@ -105,6 +116,17 @@
       errServer: 'Cannot reach local server — is it running?',
       errTimeout: 'Request timed out', errNoUrl: 'No image URL found',
       errHttp: 'Image request HTTP {0}',
+      menuOnboard: 'Backend setup wizard',
+      obTitle: 'Manga Translator setup',
+      obChecking: 'Checking local backend…',
+      obOk: 'Backend connected ✓',
+      obOkTip: 'All set. Use the bottom-right panel to translate as you scroll.',
+      obFail: 'Cannot reach the local backend (127.0.0.1:8765). To start it:',
+      obStep1: '1. Run the server console server/gui.py, or: cd server && python main.py',
+      obStep2: '2. Open http://127.0.0.1:8765 in the browser to confirm it is up',
+      obStep3: '3. Come back and click "Check again"',
+      obRetry: 'Check again', obLater: 'Later', obOpen: 'Open translator panel',
+      serverDown: 'Backend unreachable — open "Backend setup wizard" from the Tampermonkey menu',
     },
     ja: {
       lAuto: '自動検出', lJa: '日本語', lKo: '韓国語', lEn: '英語',
@@ -135,6 +157,17 @@
       errServer: 'ローカルサーバに接続できません',
       errTimeout: 'タイムアウト', errNoUrl: '画像URLが見つかりません',
       errHttp: '画像リクエスト HTTP {0}',
+      menuOnboard: 'サーバ接続ウィザード',
+      obTitle: 'Manga Translator 初期設定',
+      obChecking: 'ローカルサーバを確認中…',
+      obOk: 'サーバに接続しました ✓',
+      obOkTip: '準備完了。右下のパネルからスクロールに合わせて翻訳できます。',
+      obFail: 'ローカルサーバ（127.0.0.1:8765）に接続できません。以下の手順で起動してください：',
+      obStep1: '1. サーバコンソール server/gui.py を起動、または cd server && python main.py',
+      obStep2: '2. ブラウザで http://127.0.0.1:8765 を開いて動作を確認',
+      obStep3: '3. このページに戻って「再確認」を押す',
+      obRetry: '再確認', obLater: '後で', obOpen: '翻訳パネルを開く',
+      serverDown: 'サーバに接続できません。Tampermonkey メニューの「サーバ接続ウィザード」を開いてください',
     },
     ko: {
       lAuto: '자동 감지', lJa: '일본어', lKo: '한국어', lEn: '영어',
@@ -165,6 +198,17 @@
       errServer: '로컬 서버에 연결할 수 없습니다',
       errTimeout: '요청 시간 초과', errNoUrl: '이미지 주소를 찾을 수 없음',
       errHttp: '이미지 요청 HTTP {0}',
+      menuOnboard: '서버 연결 마법사',
+      obTitle: 'Manga Translator 초기 설정',
+      obChecking: '로컬 서버 확인 중…',
+      obOk: '서버에 연결되었습니다 ✓',
+      obOkTip: '준비 완료. 오른쪽 아래 패널에서 스크롤하는 대로 번역하세요.',
+      obFail: '로컬 서버(127.0.0.1:8765)에 연결할 수 없습니다. 다음 단계로 시작하세요:',
+      obStep1: '1. 서버 콘솔 server/gui.py 실행, 또는 cd server && python main.py',
+      obStep2: '2. 브라우저에서 http://127.0.0.1:8765 열어 정상 동작 확인',
+      obStep3: '3. 이 페이지로 돌아와 «다시 확인» 클릭',
+      obRetry: '다시 확인', obLater: '나중에', obOpen: '번역 패널 열기',
+      serverDown: '서버에 연결할 수 없음 — Tampermonkey 메뉴의 «서버 연결 마법사»를 여세요',
     },
     es: {
       lAuto: 'Detección automática', lJa: 'Japonés', lKo: 'Coreano',
@@ -197,6 +241,17 @@
       errServer: 'No se conecta al servidor local',
       errTimeout: 'Tiempo agotado', errNoUrl: 'No se encontró la URL de la imagen',
       errHttp: 'Petición de imagen HTTP {0}',
+      menuOnboard: 'Asistente de conexión',
+      obTitle: 'Configuración de Manga Translator',
+      obChecking: 'Comprobando el servidor local…',
+      obOk: 'Servidor conectado ✓',
+      obOkTip: 'Todo listo. Usa el panel de la esquina inferior derecha para traducir.',
+      obFail: 'No se conecta al servidor local (127.0.0.1:8765). Para iniciarlo:',
+      obStep1: '1. Ejecuta la consola server/gui.py, o: cd server && python main.py',
+      obStep2: '2. Abre http://127.0.0.1:8765 en el navegador para confirmar',
+      obStep3: '3. Vuelve a esta página y pulsa "Comprobar de nuevo"',
+      obRetry: 'Comprobar de nuevo', obLater: 'Más tarde', obOpen: 'Abrir panel de traducción',
+      serverDown: 'Servidor inaccesible — abre el "Asistente de conexión" en el menú de Tampermonkey',
     },
   };
 
@@ -274,6 +329,10 @@
 
   GM_registerMenuCommand(t('menuPanel'), togglePanel);
   GM_registerMenuCommand(t('menuClear'), reset);
+  GM_registerMenuCommand(t('menuOnboard'), showOnboarding);
+
+  // 首次使用自动弹出后端连接向导（onboarded 全局只记一次，不按域名隔离）
+  if (!GM_getValue('onboarded')) setTimeout(showOnboarding, 600);
 
   // 刷新/重开页面后自动恢复：这一页翻译过（有缓存）就把译文贴回来、面板自动打开，
   // 不用手动重新翻译，也不重复请求后端。只恢复缓存，不主动翻新图（不偷偷花钱）。
@@ -350,6 +409,7 @@
   // ---------- 控制面板 ----------
 
   let panel = null;
+  let serverToastShown = false;   // 后端不可达的提示每页只弹一次，免得逐张报错刷屏
 
   function togglePanel() {
     if (panel) {
@@ -466,7 +526,72 @@
       })
       .catch(() => {
         box.textContent = t('modelsFail');
+        toast(t('serverDown'));
       });
+  }
+
+  // ---------- 首次运行向导 ----------
+
+  let obCard = null;
+
+  /**
+   * 后端连通性向导：首次运行自动弹出，之后随时从油猴菜单重开。
+   * 探测 SERVER/ping：通就给「打开翻译面板」，不通就给出启动步骤和重试按钮。
+   */
+  function showOnboarding() {
+    if (obCard) { obCard.remove(); obCard = null; }
+    obCard = document.createElement('div');
+    obCard.id = 'ocrt-onboard';
+    obCard.style.cssText =
+      // 靠左放（面板占着右边 236px），避免和翻译面板叠在一起互相挡住
+      'position:fixed;bottom:20px;right:276px;z-index:2147483645;' +
+      'background:#242424;color:#eee;padding:12px 14px;border-radius:10px;' +
+      'font:13px/1.5 system-ui,"Microsoft YaHei","Malgun Gothic","Yu Gothic",sans-serif;' +
+      'box-shadow:0 6px 20px rgba(0,0,0,.45);display:flex;flex-direction:column;gap:9px;' +
+      'width:280px;box-sizing:border-box;';
+
+    const title = document.createElement('div');
+    title.textContent = t('obTitle');
+    title.style.cssText = 'font-weight:600;';
+
+    // 步骤文案是整段多行文本，用 pre-line 换行渲染
+    const body = document.createElement('div');
+    body.style.cssText = 'white-space:pre-line;word-break:break-word;';
+
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;gap:6px;';
+
+    const close = () => {
+      // 不管以哪种方式关掉都算引导完成，之后不再自动弹（菜单里随时能再开）
+      GM_setValue('onboarded', '1');
+      obCard.remove();
+      obCard = null;
+    };
+
+    const check = () => {
+      actions.textContent = '';
+      body.textContent = t('obChecking');
+      getJSON(SERVER + '/ping')
+        .then(() => {
+          GM_setValue('onboarded', '1');
+          body.textContent = t('obOk') + '\n' + t('obOkTip');
+          actions.append(
+            btn(t('obOpen'), '#2d7d46', () => { close(); togglePanel(); }),
+            btn(t('obLater'), '#5a5a5a', close)
+          );
+        })
+        .catch(() => {
+          body.textContent = [t('obFail'), t('obStep1'), t('obStep2'), t('obStep3')].join('\n');
+          actions.append(
+            btn(t('obRetry'), '#3a6ea5', check),
+            btn(t('obLater'), '#5a5a5a', close)
+          );
+        });
+    };
+
+    obCard.append(title, body, actions);
+    document.body.appendChild(obCard);
+    check();
   }
 
   /** 当前选中的供应商和模型 */
@@ -736,6 +861,11 @@
       else {
         st.failed++;
         st.lastErr = e.message || String(e);
+        // 连不上后端时逐张报错太吵，提示一次并指向连接向导就够了
+        if (e.message === t('errServer') && !serverToastShown) {
+          serverToastShown = true;
+          toast(t('serverDown'), 8000);
+        }
       }
       console.error('[ocrt]', el, e);
     } finally {

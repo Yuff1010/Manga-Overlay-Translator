@@ -246,17 +246,18 @@ Once installed, make sure the local backend is running, then open a manga page.
 ## Usage
 
 1. Open a manga reading page you are entitled to access.
-2. Click the Tampermonkey icon and choose `Manga Translator` → `Open translator panel`.
-3. Pick source and target language. Use "Auto-detect" if unsure — the detected
+2. On first use the script automatically checks whether the local backend is reachable. If not, a setup wizard pops up: follow the steps (run `server/gui.py`, or `cd server && python main.py`), then click "Check again". You can reopen the wizard anytime from the Tampermonkey menu ("Backend setup wizard").
+3. Click the Tampermonkey icon and choose `Manga Translator` → `Open translator panel`.
+4. Pick source and target language. Use "Auto-detect" if unsure — the detected
    language is reused for the rest of the run.
-4. Pick an LLM provider and model that the server has configured. You are never
+5. Pick an LLM provider and model that the server has configured. You are never
    asked for an API key here; a custom model only replaces the model name.
-5. Choose the translation scope:
+6. Choose the translation scope:
    - `Dialogue only`: default; hides sound effects, onomatopoeia, watermarks,
      page numbers and OCR noise.
    - `All text`: shows every text block the backend returns. Switching scope does
      not call the backend again.
-6. Start processing:
+7. Start processing:
    - `Translate`: on-demand mode, begins when you scroll near an image.
    - `All`: immediately processes every candidate manga image on the page.
    - `Retry failed`: re-queues only images that failed (errored or fell back to
@@ -265,11 +266,11 @@ Once installed, make sure the local backend is running, then open a manga page.
      clipboard (one per line, "source → translation"). In overlay mode text is
      not selectable, so this is the only way to export.
    - `Clear`: removes overlays on the current page and resets state.
-7. Choose the display mode:
+8. Choose the display mode:
    - `Overlay on image`: covers the original position and follows the image every frame.
    - `List below image`: plain text inserted under the image, selectable and
      copyable; easier to read when bubbles are very narrow.
-8. Read the result:
+9. Read the result:
    - Hover a block to see the OCR original.
    - Click a block to hide it for 2 seconds.
    - Press the backtick key `` ` `` to show or hide all translations.
