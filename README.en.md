@@ -282,6 +282,11 @@ Once installed, make sure the local backend is running, then open a manga page.
    - `Overlay on image`: covers the original position and follows the image every frame.
    - `List below image`: plain text inserted under the image, selectable and
      copyable; easier to read when bubbles are very narrow.
+   - In overlay mode you can also pick the overlay style: `Solid box`
+     (default), `Outlined` (transparent background, white text with black
+     outline — does not cover the artwork), or `Bilingual` (small original
+     above the translation). Switching styles only re-renders; no
+     re-translation.
 9. Read the result:
    - Hover a block to see the OCR original.
    - Click a block to hide it for 2 seconds.

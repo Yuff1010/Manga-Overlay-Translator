@@ -4,7 +4,7 @@
 // @name:ja      漫画画像翻訳 (Manga Translator)
 // @name:ko      만화 이미지 번역 (Manga Translator)
 // @namespace    https://github.com/Yuff1010/Manga-Overlay-Translator
-// @version      0.13.0
+// @version      0.14.0
 // @description  识别网页漫画图片中的外文，在原文位置覆盖显示译文。⚠ 需先在本机运行配套的 OCR + LLM 服务，仅装脚本无法工作。
 // @description:en  Reads text in manga/comic images on any page and overlays the translation in place. ⚠ Requires the companion local OCR + LLM server — the script alone will not work.
 // @description:ja  ウェブ上の漫画画像内の文字を認識し、元の位置に訳文を重ねて表示します。⚠ 別途ローカルの OCR + LLM サーバーが必要です。
@@ -38,6 +38,8 @@
   // 让字更小、框更贴合；想更好读就选「较大」。
   const FONT_LEVELS = { sm: { max: 20, pad: 2 }, md: { max: 28, pad: 4 }, lg: { max: 40, pad: 7 } };
   const FONTSIZES = { sm: 'fontSm', md: 'fontMd', lg: 'fontLg' };
+  // 覆盖层样式：实底白块（默认）/ 描边透底（还原度）/ 原文+译文对照
+  const OVSTYLES = { solid: 'styleSolid', outline: 'styleOutline', bilingual: 'styleBilingual' };
 
   // ---------- 界面语言 ----------
 
@@ -67,6 +69,7 @@
       tokens: '　tokens 输入 {0} / 输出 {1}',
       fromCache: '（其中 {0} 张来自缓存）', restored: '已恢复上次的 {0} 张译文',
       fontSm: '译文紧凑', fontMd: '译文标准', fontLg: '译文较大',
+      styleSolid: '实底白块', styleOutline: '描边透底', styleBilingual: '原文对照',
       untranslated: '，{0} 张翻译失败显示原文', failed: '，失败 {0} 张：{1}',
       tainted: '，{0} 张画布受站点保护读不出',
       notimg: '，{0} 张取回的不是图片（多为防盗链）',
@@ -106,6 +109,7 @@
       tokens: '　tokens in {0} / out {1}',
       fromCache: ' ({0} from cache)', restored: 'Restored {0} image(s) from last time',
       fontSm: 'Compact text', fontMd: 'Standard text', fontLg: 'Larger text',
+      styleSolid: 'Solid box', styleOutline: 'Outlined', styleBilingual: 'Bilingual',
       untranslated: ', {0} failed and show original', failed: ', {0} errored: {1}',
       tainted: ', {0} on protected canvas',
       notimg: ', {0} did not return an image (hotlink protection?)',
@@ -147,6 +151,7 @@
       tokens: '　tokens 入力 {0} / 出力 {1}',
       fromCache: '（うち {0} 枚はキャッシュ）', restored: '前回の訳文 {0} 枚を復元しました',
       fontSm: '訳文コンパクト', fontMd: '訳文標準', fontLg: '訳文大きめ',
+      styleSolid: '白背景', styleOutline: 'フチ取り', styleBilingual: '原文付き',
       untranslated: '、{0} 枚は翻訳失敗で原文表示', failed: '、{0} 枚失敗: {1}',
       tainted: '、{0} 枚はcanvas保護で読めず',
       notimg: '、{0} 枚は画像を取得できず（直リンク制限？）',
@@ -188,6 +193,7 @@
       tokens: '　tokens 입력 {0} / 출력 {1}',
       fromCache: ' ({0}장 캐시)', restored: '지난번 번역 {0}장 복원됨',
       fontSm: '번역문 작게', fontMd: '번역문 표준', fontLg: '번역문 크게',
+      styleSolid: '흰 배경', styleOutline: '외곽선', styleBilingual: '원문 대조',
       untranslated: ', {0}장 번역 실패로 원문 표시', failed: ', {0}장 오류: {1}',
       tainted: ', {0}장 canvas 보호로 읽기 불가',
       notimg: ', {0}장 이미지가 아님(핫링크 차단?)',
@@ -229,6 +235,7 @@
       tokens: '　tokens entrada {0} / salida {1}',
       fromCache: ' ({0} en caché)', restored: 'Restauradas {0} imagen(es) de antes',
       fontSm: 'Texto compacto', fontMd: 'Texto estándar', fontLg: 'Texto grande',
+      styleSolid: 'Caja sólida', styleOutline: 'Contorno', styleBilingual: 'Bilingüe',
       untranslated: ', {0} fallaron y muestran el original',
       failed: ', {0} con error: {1}',
       tainted: ', {0} en canvas protegido',
@@ -310,6 +317,7 @@
   const getMode = () => GM_getValue('mode', 'overlay');
   const getScope = () => GM_getValue('scope', 'dialogue');
   const getFont = () => FONT_LEVELS[GM_getValue('fontsize', 'md')] || FONT_LEVELS.md;
+  const getStyle = () => OVSTYLES[GM_getValue('ovstyle', 'solid')] ? GM_getValue('ovstyle', 'solid') : 'solid';
 
   // 按需翻译的运行状态
   const q = [];                // 待翻译队列
@@ -465,6 +473,12 @@
       restyle();        // 字号/留白变了，重排一遍已翻好的，不用重新翻译
     });
 
+    // 覆盖层样式：实底/描边/对照，切换只重绘外观，不重新翻译
+    const ovstyle = sel(labeled(OVSTYLES), getStyle(), (v) => {
+      GM_setValue('ovstyle', v);
+      restyleStyle();
+    });
+
     // 界面语言：换了要重建面板，因为每个控件的文案都是创建时定下的
     const ui = sel(UI_LANGS, getUI(), (v) => {
       GM_setValue('ui', v);
@@ -485,7 +499,7 @@
     tip.textContent = t('hint');
     tip.style.cssText = 'opacity:.6;font-size:12px;word-break:break-word;white-space:normal;';
 
-    panel.append(row, llmRow, mode, scope, font, ui, btns, btns2, hide, tip);
+    panel.append(row, llmRow, mode, scope, font, ovstyle, ui, btns, btns2, hide, tip);
     document.body.appendChild(panel);
     toggleHide(hidden);   // 同步按钮文案到当前状态
     loadModels(llmRow);
@@ -1122,17 +1136,19 @@
       el.dataset.i = i;
       // 后端标出的"是否对白"，供切换翻译范围时筛选
       el.dataset.dlg = b.dialogue === false ? '0' : '1';
-      el.textContent = b.translation || b.text;
       // 翻译失败时覆盖层显示的其实是原文，用淡黄底标出来，别让人误以为翻译成功
       const failed = data.translated === false;
       el.title = failed ? t('tipFailed') + b.text : b.text;
+      // 定位/布局骨架；背景、字色、内容由 applyBlockStyle 按样式偏好填。
+      // flex-direction:column 给对照模式上下两行用，单行样式无感。
       el.style.cssText =
-        'position:absolute;display:flex;align-items:center;justify-content:center;' +
+        'position:absolute;display:flex;flex-direction:column;gap:2px;' +
+        'align-items:center;justify-content:center;' +
         'text-align:center;overflow:hidden;box-sizing:border-box;' +
-        `background:${failed ? 'rgba(255,247,214,.95)' : 'rgba(255,255,255,.93)'};` +
-        'color:#111;border-radius:4px;' +
+        'border-radius:4px;' +
         'line-height:1.25;padding:1px 2px;pointer-events:auto;cursor:pointer;' +
         'font-family:system-ui,"Microsoft YaHei","Malgun Gothic","Yu Gothic",sans-serif;word-break:break-all;';
+      applyBlockStyle(el, b, failed);
       // 点击暂时隐藏，便于看原图
       el.addEventListener('click', () => {
         el.style.visibility = 'hidden';
@@ -1291,6 +1307,61 @@
       el.style.writingMode = bh > bw * 1.6 ? 'vertical-rl' : 'horizontal-tb';
     }
     unifyFont(ov);
+  }
+
+  /**
+   * 按当前样式偏好设置一个译文块的外观与内容。
+   * 样式切换时对已有块重跑这个函数即可，不必重新翻译。
+   * 只动背景/字色/文字阴影/内容，不碰定位属性（left/top 等由 position() 管）。
+   */
+  function applyBlockStyle(el, b, failed) {
+    const trans = b.translation || b.text;
+    // 翻译失败的块无论什么样式都保持淡黄底警示——它显示的其实是原文
+    if (failed) {
+      el.style.background = 'rgba(255,247,214,.95)';
+      el.style.color = '#111';
+      el.style.textShadow = '';
+      el.textContent = trans;
+      return;
+    }
+    const style = getStyle();
+    if (style === 'outline') {
+      // 无底白字 + 八方向黑描边：贴近汉化组的透底效果，不遮画面
+      el.style.background = 'transparent';
+      el.style.color = '#fff';
+      el.style.textShadow =
+        '-1px -1px #000,1px -1px #000,-1px 1px #000,1px 1px #000,' +
+        '0 -2px #000,0 2px #000,-2px 0 #000,2px 0 #000';
+      el.textContent = trans;
+      return;
+    }
+    el.style.background = 'rgba(255,255,255,.93)';
+    el.style.color = '#111';
+    el.style.textShadow = '';
+    if (style === 'bilingual') {
+      // 原文小字在上、译文在下；原字号由 unifyFont 定，原文用 em 相对缩小
+      el.textContent = '';
+      const orig = document.createElement('div');
+      orig.textContent = b.text;
+      orig.style.cssText = 'opacity:.6;font-size:.72em;max-height:45%;overflow:hidden;';
+      const tr = document.createElement('div');
+      tr.textContent = trans;
+      el.append(orig, tr);
+      return;
+    }
+    el.textContent = trans;      // solid：默认实底白块
+  }
+
+  /** 样式偏好变了：重建所有已翻好覆盖层的外观，不重新请求后端 */
+  function restyleStyle() {
+    for (const e of tracked) {
+      if (!e.ov) continue;
+      const failed = e.data.translated === false;
+      for (const el of e.ov.children) {
+        applyBlockStyle(el, e.data.blocks[el.dataset.i], failed);
+      }
+    }
+    restyle();   // 对照模式内容更多，字号可能要重排
   }
 
   /** 字号档位变了：重排所有已翻好的覆盖层，不重新请求后端 */
