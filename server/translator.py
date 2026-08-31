@@ -1,7 +1,9 @@
 """调用 OpenAI 兼容的 LLM API 整批翻译（保持上下文连贯）。"""
 import json
 import os
+import threading
 import time
+from collections import OrderedDict
 
 import requests
 from dotenv import load_dotenv
@@ -72,8 +74,17 @@ def get_profiles():
 
 
 def list_profiles():
-    """供 /config 用。刻意不返回 api_key——它不该离开服务端。"""
-    return [{"id": p["id"], "name": p["name"], "models": p["models"]} for p in get_profiles()]
+    """供 /config 用。刻意不返回 api_key——它不该离开服务端；
+    只回一个 has_key 布尔，让状态页能如实显示是否配过密钥。"""
+    return [
+        {
+            "id": p["id"],
+            "name": p["name"],
+            "models": p["models"],
+            "has_key": bool(p["api_key"]),
+        }
+        for p in get_profiles()
+    ]
 
 
 def get_profile(pid: str = ""):
@@ -93,7 +104,10 @@ def get_profile(pid: str = ""):
 _no_thinking = {}
 
 SYSTEM_PROMPT = (
-    "你是专业漫画翻译。输入是同一页漫画里 OCR 出来的文本数组。\n"
+    "你是专业漫画翻译。输入是同一页漫画里 OCR 出来的文本数组，"
+    "每项是字符串，或形如 {{\"i\": 序号, \"pos\": \"右列·上部\", \"t\": 文本}} 的对象。\n"
+    "pos 是该块在页面上的大致位置（列×上下）。判断阅读顺序时参考它："
+    "日漫竖排从右往左读，韩漫条漫从上往下。\n"
     "对每一项输出一个对象 {{\"t\": 译文, \"d\": 1或0}}：\n"
     "t —— 翻译成{target}，口语化、简短、符合漫画语气；"
     "同页台词注意上下文连贯，OCR 可能有错字，按语境纠正。\n"
@@ -102,13 +116,132 @@ SYSTEM_PROMPT = (
     "只返回与输入等长的 JSON 数组，不要输出任何其他内容。"
 )
 
+# 术语表收集指令单独拼在 system 消息尾部：GLOSSARY=0 时不出现，
+# 省得既不收集又让模型白白输出 g 字段。
+GLOSS_ASK = (
+    "g —— 可选。对重要专名（角色名/地名/招式名等），"
+    '在对应输出项加 "g": {"s": 原文, "t": 译名"}；其余省略 g。'
+)
 
-def _post(texts, target: str, prof, model: str, no_thinking: bool):
+
+def pos_meta(x, y, w, h, img_w, img_h):
+    """块中心相对页面的位置描述，如「右列·上部」。
+
+    刻意脱敏成三列×三行：原始像素坐标对模型没有意义还占 token，
+    相对位置才是还原阅读顺序（竖排右→左）所需的信息。
+    """
+    def third(v, names):
+        return names[min(2, int(v * 3))]
+
+    cx = (x + w / 2) / img_w if img_w else 0.5
+    cy = (y + h / 2) / img_h if img_h else 0.5
+    return f"{third(cx, ('左列', '中列', '右列'))}·{third(cy, ('上部', '中部', '下部'))}"
+
+
+def _gloss_enabled():
+    """GLOSSARY=0 关闭术语表（收集与注入都停）。默认开。"""
+    return os.getenv("GLOSSARY", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+class _Gloss:
+    """跨页术语表（进程内存）。
+
+    模型在输出项里附带 "g": {"s","t"} 建议译名；同一原文被建议 PROMOTE_N 次
+    才晋升入表——单次 OCR 错认或翻译抖动不会被固化传播。之后注入 system
+    prompt 让译名跨页一致。只存内存：重启即清空，而一次阅读会话 ≈ 一部
+    漫画，正好是需要的生命周期。
+    """
+
+    PROMOTE_N = 2       # 晋升阈值
+    MAX_ENTRIES = 300   # 每个目标语言的表上限，超出逐出最久未用
+    INJECT_MAX = 60     # prompt 里最多注入多少条，控制 token
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._pending = {}   # target -> {src: {"t": dst, "n": 次数}}
+        self._table = {}     # target -> OrderedDict[src] = dst
+
+    def note(self, target, entries):
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            s = str(e.get("s") or "").strip()
+            t = str(e.get("t") or "").strip()
+            if not s or not t or s == t:
+                continue
+            with self._lock:
+                tab = self._table.setdefault(target, OrderedDict())
+                if s in tab:
+                    tab.move_to_end(s)     # 已在表中：不改译名，只刷新热度
+                    continue
+                pend = self._pending.setdefault(target, {})
+                rec = pend.get(s) or {"t": t, "n": 0}
+                rec["n"] += 1
+                pend[s] = rec
+                # 两次建议译名不一致时以最近一次为准；配合晋升阈值，
+                # 偶发抖动到不了 PROMOTE_N，进不了表
+                rec["t"] = t
+                if rec["n"] >= self.PROMOTE_N:
+                    tab[s] = t
+                    pend.pop(s, None)
+                    while len(tab) > self.MAX_ENTRIES:
+                        tab.popitem(last=False)
+
+    def block(self, target):
+        """拼进 system prompt 的术语表文本；无表或被关闭时返回空。"""
+        if not _gloss_enabled():
+            return ""
+        with self._lock:
+            tab = self._table.get(target) or {}
+            items = list(tab.items())[-self.INJECT_MAX:]
+        return "\n".join(f"{s} → {t}" for s, t in items)
+
+
+gloss = _Gloss()
+
+
+def _system_content(target):
+    """system 消息：基础 prompt + 可选的 g 收集指令 + 可选的术语表。"""
+    c = SYSTEM_PROMPT.format(target=target)
+    if _gloss_enabled():
+        c += "\n" + GLOSS_ASK
+        g = gloss.block(target)
+        if g:
+            c += "\n术语表（固定译名，必须沿用）：\n" + g
+    return c
+
+
+def _build_user_content(texts, metas=None):
+    """user 消息。有 metas（与 texts 等长的位置描述列表）时带上序号和
+    位置帮模型还原阅读顺序；没有就保持旧的纯字符串数组。"""
+    if metas is None:
+        return json.dumps(texts, ensure_ascii=False)
+    items = [{"i": i, "pos": pos, "t": t} for i, (t, pos) in enumerate(zip(texts, metas))]
+    return json.dumps(items, ensure_ascii=False)
+
+
+def _note_gloss(target, result):
+    """从模型输出里提取 "g" 术语建议记入表。任何异常都不影响翻译主链路。"""
+    try:
+        if not _gloss_enabled():
+            return
+        entries = [
+            item["g"]
+            for item in result
+            if isinstance(item, dict) and isinstance(item.get("g"), dict)
+        ]
+        if entries:
+            gloss.note(target, entries)
+    except Exception as e:  # noqa: BLE001
+        print(f"[translator] 记录术语建议失败（忽略）: {e}")
+
+
+def _post(texts, target: str, prof, model: str, no_thinking: bool, metas=None):
     body = {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT.format(target=target)},
-            {"role": "user", "content": json.dumps(texts, ensure_ascii=False)},
+            {"role": "system", "content": _system_content(target)},
+            {"role": "user", "content": _build_user_content(texts, metas)},
         ],
         "temperature": 0.3,
     }
@@ -130,16 +263,16 @@ RETRIES = 3       # 偶发失败（限流、超时、返回条数对不上）重
 CHUNK = 25        # 单次最多翻多少条，太长模型容易少返回几条
 
 
-def _translate_once(texts, target: str, prof, model: str, usage: dict):
+def _translate_once(texts, target: str, prof, model: str, usage: dict, metas=None):
     """翻一批。成功返回等长列表；token 用量累加进 usage。"""
     pid = prof["id"]
     nt = _no_thinking.get(pid, True)
-    resp = _post(texts, target, prof, model, nt)
+    resp = _post(texts, target, prof, model, nt, metas)
     if resp.status_code == 400 and nt:
         # 该接口不认识 thinking 参数 → 只对这个供应商记下，退回普通请求
         _no_thinking[pid] = False
         print(f"[translator] {prof['name']} 不支持 thinking 参数，已退回普通模式")
-        resp = _post(texts, target, prof, model, False)
+        resp = _post(texts, target, prof, model, False, metas)
     resp.raise_for_status()
     try:
         body = resp.json()
@@ -164,6 +297,7 @@ def _translate_once(texts, target: str, prof, model: str, usage: dict):
     if not isinstance(result, list) or len(result) != len(texts):
         got = len(result) if isinstance(result, list) else "非数组"
         raise ValueError(f"返回条数不符：期望 {len(texts)}，实际 {got}")
+    _note_gloss(target, result)
     return _unpack(result, texts)
 
 
@@ -204,13 +338,13 @@ def _fatal_reason(e):
     }[code]
 
 
-def _translate_chunk(texts, target: str, prof, model: str, usage: dict):
+def _translate_chunk(texts, target: str, prof, model: str, usage: dict, metas=None):
     """带重试。返回 (译文, 是否对白, 错误说明)。全部失败则原样返回原文。"""
     err = ""
     keep_all = [True] * len(texts)      # 兜底时不做过滤，免得把台词也吞了
     for i in range(RETRIES):
         try:
-            out, dialog = _translate_once(texts, target, prof, model, usage)
+            out, dialog = _translate_once(texts, target, prof, model, usage, metas)
             return out, dialog, ""
         except Exception as e:  # noqa: BLE001
             fatal = _fatal_reason(e)
@@ -224,12 +358,18 @@ def _translate_chunk(texts, target: str, prof, model: str, usage: dict):
     return texts, keep_all, f"{prof['name']}：{err}"
 
 
-def translate_texts(texts, target: str = "中文", profile_id: str = "", model: str = ""):
+def translate_texts(texts, target: str = "中文", profile_id: str = "", model: str = "",
+                    metas=None):
     """整页台词批量翻译，分批进行，某批失败不影响其余批次。
+
+    metas 是与 texts 等长的位置描述列表（pos_meta 的输出），随批一起切片，
+    帮模型按页面位置还原阅读顺序；长度不齐时忽略，退回无位置模式。
 
     返回 (译文列表, 是否对白列表, usage, 错误说明)。usage 用返回值传出而不是
     记在模块变量上——前端 4 路并发时模块级变量会被互相覆盖。
     """
+    if metas is not None and len(metas) != len(texts):
+        metas = None
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
     prof = get_profile(profile_id)          # 编号非法会抛 ValueError，由上层转成 400
     model = model or prof["models"][0]
@@ -238,7 +378,10 @@ def translate_texts(texts, target: str = "中文", profile_id: str = "", model: 
                 [True] * len(texts), usage, f"{prof['name']}：未配置 API_KEY")
     out, dialog, err = [], [], ""
     for i in range(0, len(texts), CHUNK):
-        part, dlg, e = _translate_chunk(texts[i : i + CHUNK], target, prof, model, usage)
+        part, dlg, e = _translate_chunk(
+            texts[i : i + CHUNK], target, prof, model, usage,
+            metas[i : i + CHUNK] if metas else None,
+        )
         out.extend(part)
         dialog.extend(dlg)
         err = err or e          # 记住第一个错误，够定位问题了

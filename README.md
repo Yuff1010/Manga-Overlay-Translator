@@ -69,6 +69,8 @@ LLM 按语境纠正后的结果。
 - 支持目标语言选择：中文、英文、日文、韩文。
 - 语言和模型偏好按域名记忆：不同站点各自记住上次的选择（首次访问回退全局默认）。显示偏好（模式、范围、字号、界面语言）全局共享。
 - 支持在面板上切换 LLM 供应商和模型，也可手填模型名。
+- 翻译请求附带每个文本块的相对位置，LLM 据此还原阅读顺序（日漫竖排右→左），台词上下文更连贯。
+- 跨页术语一致性：反复出现的专有名词（角色名/地名/招式名）自动获得固定译名，存于服务端内存（重启清空），`GLOSSARY=0` 可关闭。
 - 面板显示本轮累计消耗的输入 / 输出 token。
 - 按图片原始坐标返回 OCR 文本框，前端按页面缩放比例定位覆盖层。
 - 支持两种显示方式：译文盖在图片原文位置并逐帧跟随，或作为普通文字插在图片下方。
@@ -170,6 +172,12 @@ LLM_2_MODELS=gpt-4o-mini,gpt-4o
 API Key 只保存在服务端。用户脚本以 `@match *://*/*` 注入所有页面，
 密钥若存进浏览器存储，脚本在任意网页上都能读到它，因此面板只在服务端
 预先配好的若干组之间切换，不接受填写密钥。
+
+可选开关（同样写在 `server/.env`）：
+
+```env
+GLOSSARY=1   # 跨页术语一致性；设 0 关闭（默认开）
+```
 
 改了 `.env` 不用重启服务：下次请求 `/config` 或 `/translate` 时后端会按文件修改时间自动重载。
 
@@ -318,12 +326,12 @@ http://127.0.0.1:8765/ping
 
 ### `GET /config`
 
-返回可用的 LLM 供应商与模型，供用户脚本填充下拉框。响应不包含 API Key。
+返回可用的 LLM 供应商与模型，供用户脚本填充下拉框。响应不包含 API Key，只有 `has_key` 布尔表示该供应商是否配置过密钥（状态页据此如实显示）。
 
 ```json
 {
   "profiles": [
-    { "id": "1", "name": "DeepSeek", "models": ["deepseek-chat", "deepseek-reasoner"] }
+    { "id": "1", "name": "DeepSeek", "models": ["deepseek-chat", "deepseek-reasoner"], "has_key": true }
   ],
   "default": { "profile": "1", "model": "deepseek-chat" }
 }
@@ -391,6 +399,38 @@ python -c "import paddle; paddle.utils.run_check()"
 ```
 
 如果输出显示 Paddle 正常检测到 GPU，即可使用 GPU 推理。
+
+**验证后端真的在用 GPU**：启动服务后查看状态页 `http://127.0.0.1:8765` 的「运行设备」，
+或：
+
+```bash
+curl http://127.0.0.1:8765/ocr-status
+# {"device":"gpu","models":{...}}   ← device 应为 gpu
+```
+
+常见坑：
+
+- 启动日志/状态页显示 `运行设备：CPU` → 起服务的那个 Python 环境装的是 CPU 版
+  paddlepaddle（`paddle.is_compiled_with_cuda()` 为假）。用控制台 `server/gui.py`
+  切到 GPU 环境再启动。
+- GPU 版 paddle 报 `cudnn` / `PreconditionNotMetError` → CUDA 与 paddle 版本不配，
+  详见安装页对应版本的说明。
+
+**OCR 模型与重试（可选，写在 `server/.env`，改后重启生效）**：
+
+```env
+# 换轻量检测/识别模型提速（paddleocr 3.x；候选如 PP-OCRv6_small_det /
+# PP-OCRv6_tiny_det / PP-OCRv6_small_rec）。实测 PP-OCRv6_small_det 在 CPU 上
+# 接近提速一倍、合成页精度无损；PP-OCRv5_mobile_det 对韩语有害，韩语勿用
+OCR_DET_MODEL=
+OCR_REC_MODEL=
+# 低置信度文本行按原分辨率裁剪重试。默认只对韩语开（实测 recall 0.11→0.65）；
+# =1 对所有语言开，=0 全关
+OCR_RETRY_LOW_CONF=
+```
+
+是否换轻量模型请先用基准脚本实测再决定
+（`OCRT_SLOW=1 python server/tests/bench_ocr.py`，输出各组合的识别命中率与耗时）。
 
 ## 关键实现细节
 
@@ -466,7 +506,9 @@ http://127.0.0.1:8765/ping
 - 文字是变形拟声词或嵌入纹理。
 - 气泡文字被画面遮挡。
 - 源语言选择错误。
-- 韩语 OCR 相比日语、英语更不稳定。
+- 韩语 OCR 相比日语、英语更不稳定：大字号（约 56px+）与部分漏检行仍会失败；
+  低置信度行已默认按原分辨率裁剪重试（实测 recall 0.11 → 0.65），可用
+  `OCR_RETRY_LOW_CONF=0` 关闭。
 
 ## 已知限制
 

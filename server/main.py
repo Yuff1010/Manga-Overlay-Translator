@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from bubble import bubble_boxes, in_bubble
 from ocr import detect_lang, pool_status, run_ocr
-from translator import list_profiles, translate_texts
+from translator import list_profiles, pos_meta, translate_texts
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _USERSCRIPT_PATH = os.path.join(_HERE, "..", "userscript", "ocr-translator.user.js")
@@ -70,9 +70,15 @@ def translate(req: TranslateRequest):
     error = ""
     if blocks:
         texts = [b["text"] for b in blocks]
+        # 位置上下文：块的相对位置随请求进 prompt，让模型按页面布局还原
+        # 阅读顺序（日漫竖排右→左），而不是按 OCR 吐出的顺序硬翻
+        metas = [
+            pos_meta(b["x"], b["y"], b["w"], b["h"], img.width, img.height)
+            for b in blocks
+        ]
         try:
             out, dialog, usage, error = translate_texts(
-                texts, req.target, req.profile, req.model
+                texts, req.target, req.profile, req.model, metas=metas
             )
         except ValueError as e:      # 供应商编号非法
             raise HTTPException(status_code=400, detail=str(e))
@@ -142,6 +148,7 @@ ul{padding-left:18px;margin:6px 0}.tips li{margin:3px 0}
 <div class="card"><h2>后端</h2>
   <div class="row"><span class="label">服务地址</span><code>http://127.0.0.1:8765</code></div>
   <div class="row"><span class="label">状态</span><span id="be-status" class="info">检测中…</span></div>
+  <div class="row"><span class="label">运行设备</span><span id="device-status" class="info">检测中…</span></div>
   <div class="row"><span class="label">已加载 OCR 模型</span><span id="ocr-models" class="info">—</span></div>
 </div>
 <div class="card"><h2>LLM 配置</h2><div id="llm-box" class="info">读取中…</div></div>
@@ -153,7 +160,8 @@ ul{padding-left:18px;margin:6px 0}.tips li{margin:3px 0}
 </div>
 <div class="card"><h2>常见自查</h2><ul>
   <li class="info">面板打不开 / 模型列表为空 → 确认本页后端状态是绿色的"运行中"。</li>
-  <li class="info">翻译全是原文（淡黄）→ 检查 LLM 配置区有没有"已配置 API Key"。</li>
+  <li class="info">翻译全是原文（淡黄）→ 检查 LLM 配置区有没有"未配置 API_KEY"。</li>
+  <li class="info">速度莫名慢 → 看「运行设备」：显示 CPU 说明当前 paddle 是 CPU 版，换 GPU 环境启动可加速。</li>
   <li class="info">首次翻译某语言很慢 → PaddleOCR 第一次要下载模型（几百 MB），属正常。</li>
   <li class="info">韩语 OCR 不稳定是已知限制，日语/英语较可靠。</li>
   <li class="info">改了 <code>.env</code> 不用重启，下次请求自动重载。</li>
@@ -170,9 +178,10 @@ fetch('/config').then(r=>r.json()).then(cfg=>{
   const ps=cfg.profiles||[];
   if(!ps.length){box.innerHTML='<span class="warn">未配置任何供应商，请编辑 server/.env</span>';return;}
   const rows=ps.map(p=>{
-    const hasKey=p.id?true:true; // /config 不回 key，有 profile 即视为配过
     const models=(p.models||[]).join(', ')||'(无模型)';
-    return '<div class="row"><span class="label">'+p.name+' (供应商 '+p.id+')</span><span class="val ok">已配置 · '+models+'</span></div>';
+    const ok=p.has_key!==false;
+    const state=(ok?'已配置':'未配置 API_KEY')+' · '+models;
+    return '<div class="row"><span class="label">'+p.name+' (供应商 '+p.id+')</span><span class="val '+(ok?'ok':'warn')+'">'+state+'</span></div>';
   });
   box.innerHTML=rows.join('');
 }).catch(()=>{document.getElementById('llm-box').innerHTML='<span class="err">无法读取 /config</span>';});
@@ -184,6 +193,13 @@ function refreshOcr(){
     const keys=Object.keys(langs);
     if(!keys.length){el.textContent='尚未使用（首次翻译时下载）';el.className='warn';}
     else{el.textContent=keys.map(k=>k+' ('+langs[k]+' 实例)').join(', ');el.className='ok';}
+    // 设备如实展示：用户以为在用 GPU、实际 paddle 是 CPU 版，是"速度莫名慢"的最常见原因
+    const dv=document.getElementById('device-status');
+    if(dv){
+      if(d.device==='gpu'){dv.textContent='GPU（加速中）';dv.className='ok';}
+      else if(d.device==='cpu'){dv.textContent='CPU（未启用 GPU 加速）';dv.className='warn';}
+      else{dv.textContent='未知';dv.className='info';}
+    }
   }).catch(()=>{document.getElementById('ocr-models').textContent='未知';});
 }
 refreshOcr();
@@ -205,8 +221,9 @@ def status_page():
 
 @app.get("/ocr-status")
 def ocr_status():
-    """供状态页 JS 刷新：返回已加载的 OCR 语言模型及实例数。"""
-    return {"models": pool_status()}
+    """供状态页 JS 刷新：device 是 paddle 实际运行设备，models 是已加载的
+    OCR 语言模型及实例数（pool_status 已含这两个键，直接透传）。"""
+    return pool_status()
 
 
 @app.get("/userscript")

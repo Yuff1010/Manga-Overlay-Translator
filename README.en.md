@@ -84,6 +84,12 @@ GPU / bubble-enhancement configuration.
   last choice (first visit falls back to the global default). Display preferences
   (mode, scope, font size, UI language) are shared globally.
 - Switch LLM provider and model from the panel, or type a model name by hand.
+- Each text block's relative position is sent with the translation request, so
+  the LLM can reconstruct reading order (vertical Japanese reads right-to-left)
+  and keep dialogue context coherent.
+- Cross-page term consistency: recurring proper nouns (character / place /
+  move names) get a stable translation, kept in server memory (cleared on
+  restart); disable with `GLOSSARY=0`.
 - The panel shows cumulative input / output tokens for the current run.
 - OCR text boxes are returned in original-image coordinates; the frontend scales
   the overlay to the displayed image size.
@@ -191,6 +197,12 @@ API keys stay on the server. The userscript is injected on every page via
 `@match *://*/*`; if a key lived in browser storage the script could read it on
 any site, so the panel only switches between provider groups pre-configured on
 the server and never accepts a key.
+
+Optional switch (also in `server/.env`):
+
+```env
+GLOSSARY=1   # cross-page term consistency; set 0 to disable (default on)
+```
 
 No restart needed after editing `.env`: the backend detects the file change by
 modification time and reloads on the next `/config` or `/translate` request.
@@ -357,12 +369,13 @@ enhancement must never lose OCR results that were already obtained.
 ### `GET /config`
 
 Returns the available LLM providers and models for the userscript dropdown. The
-response never contains API keys.
+response never contains API keys — only a `has_key` boolean telling whether the
+provider has a key configured (the status page uses it to show the real state).
 
 ```json
 {
   "profiles": [
-    { "id": "1", "name": "DeepSeek", "models": ["deepseek-chat", "deepseek-reasoner"] }
+    { "id": "1", "name": "DeepSeek", "models": ["deepseek-chat", "deepseek-reasoner"], "has_key": true }
   ],
   "default": { "profile": "1", "model": "deepseek-chat" }
 }
@@ -445,6 +458,43 @@ python -c "import paddle; paddle.utils.run_check()"
 
 If the check reports that Paddle detects a GPU, inference will use it.
 
+**Verify the backend is actually on GPU**: after starting the server, check the
+"Device" row on the status page (`http://127.0.0.1:8765`), or:
+
+```bash
+curl http://127.0.0.1:8765/ocr-status
+# {"device":"gpu","models":{...}}   ← device should be gpu
+```
+
+Common pitfalls:
+
+- Startup log / status page says `CPU` → the Python environment that launched
+  the server has the CPU build of paddlepaddle (`is_compiled_with_cuda()` is
+  false). Switch to a GPU environment via the `server/gui.py` console.
+- GPU paddle fails with `cudnn` / `PreconditionNotMetError` → your CUDA
+  version does not match the paddle build; see the install page for that
+  version.
+
+**OCR models & retry (optional, in `server/.env`; restart to apply)**:
+
+```env
+# Swap in lighter det/rec models for speed (paddleocr 3.x; e.g.
+# PP-OCRv6_small_det / PP-OCRv6_tiny_det / PP-OCRv6_small_rec).
+# Measured on the synthetic benchmark: PP-OCRv6_small_det is ~2x faster on
+# CPU with no accuracy loss; PP-OCRv5_mobile_det breaks Korean (0 blocks) —
+# do not use it for Korean.
+OCR_DET_MODEL=
+OCR_REC_MODEL=
+# Retry low-confidence lines once at native-resolution crops. Default: on
+# for Korean only (measured recall 0.11 -> 0.65); =1 enables for all
+# languages, =0 disables entirely.
+OCR_RETRY_LOW_CONF=
+```
+
+Measure before switching models: run the benchmark
+(`OCRT_SLOW=1 python server/tests/bench_ocr.py`) and compare accuracy/time
+per combination.
+
 ## Key implementation notes
 
 ### Long-image tiling
@@ -526,7 +576,10 @@ Common causes:
 - The text is stylized onomatopoeia or embedded in texture.
 - Bubble text is partly covered by artwork.
 - The wrong source language is selected.
-- Korean OCR is less stable than Japanese or English.
+- Korean OCR is less stable than Japanese or English: large fonts (~56px+) and
+  some missed detections still fail. Low-confidence lines are retried at native
+  resolution by default (measured recall 0.11 -> 0.65); disable with
+  `OCR_RETRY_LOW_CONF=0`.
 
 ## Known limitations
 

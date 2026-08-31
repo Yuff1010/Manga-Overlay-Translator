@@ -9,6 +9,7 @@ det_rearrange_forward）：只要切片最长边不超过 DET_LIMIT，检测器�
 文字能以原始分辨率进入模型。
 """
 import math
+import os
 import queue
 import threading
 
@@ -16,6 +17,11 @@ DET_LIMIT = 960     # PaddleOCR 检测器输入上限（det_limit_side_len 默�
 TILE_OVERLAP = 200  # 切片重叠，避免正好从一行字中间切断
 POOL_SIZE = 3       # 每种语言的实例数
 CPU_THREADS = 5     # 每实例线程数
+RETRY_CONF = 0.75   # 低于此置信度的行，裁出来单独重试一次
+RETRY_FLOOR = 0.3   # 重试模式下的进门门槛：先放进低置信行给重试一次机会
+# 重试裁剪的外扩比例。实测韩语整页（合成页基准，ocrt-vl/GPU）：
+#   0.15 → recall 0.33    0.3 → 0.65    0.5 → 0.65    0.8 → 0（裁太大检测失效）
+RETRY_MARGIN = 0.3
 
 # POOL_SIZE × CPU_THREADS 要贴着物理核心数，别超额订阅：
 # 16 核实测（4 路并发、真实条漫图，数值为 20 张图的总耗时）
@@ -44,6 +50,22 @@ def _is_v3() -> bool:
         return False
 
 
+def _env_models():
+    """从环境变量读自定义 det/rec 模型名（写在 .env，改后需重启——实例池
+    里的模型不会热切换）。返回值可直接并进 PaddleOCR(...) 的 kwargs。
+
+    用于换轻量模型提速：如 OCR_DET_MODEL=PP-OCRv6_small_det。
+    """
+    kw = {}
+    det = os.getenv("OCR_DET_MODEL", "").strip()
+    rec = os.getenv("OCR_REC_MODEL", "").strip()
+    if det:
+        kw["text_detection_model_name"] = det
+    if rec:
+        kw["text_recognition_model_name"] = rec
+    return kw
+
+
 def _new_ocr(lang: str):
     """新建一个 PaddleOCR 实例（首次调用会下载模型）。"""
     try:
@@ -56,17 +78,33 @@ def _new_ocr(lang: str):
         # 文档方向矫正和去扭曲是给扫描件用的，漫画用不上，关掉省时间
         # Paddle 3.3.x + PP-OCRv6 在部分 Windows CPU 环境的 oneDNN 执行器
         # 会报 ConvertPirAttribute2RuntimeAttribute；关闭 MKL-DNN 走稳定路径。
-        return PaddleOCR(
+        inst = PaddleOCR(
             lang=lang,
             use_textline_orientation=True,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             enable_mkldnn=False,
             cpu_threads=CPU_THREADS,
+            **_env_models(),
         )
-    return PaddleOCR(
-        use_angle_cls=True, lang=lang, show_log=False, cpu_threads=CPU_THREADS
-    )
+    else:
+        models = _env_models()
+        if models:
+            print("[ocr] OCR_DET_MODEL/OCR_REC_MODEL 只在 paddleocr 3.x 生效，本环境是 2.x，已忽略")
+        inst = PaddleOCR(
+            use_angle_cls=True, lang=lang, show_log=False, cpu_threads=CPU_THREADS
+        )
+    # 设备如实播报而不是静默回退：用户以为在用 GPU、实际 paddle 是 CPU 版，
+    # 是「速度莫名慢」的最常见原因
+    dev = device_info()
+    if dev == "gpu":
+        print(f"[ocr] {lang} 实例就绪，运行设备：GPU")
+    elif dev == "cpu":
+        print(f"[ocr] {lang} 实例就绪，运行设备：CPU（paddle 未检测到可用 GPU；"
+              f"如需加速请用装了 paddlepaddle-gpu 的环境启动）")
+    else:
+        print(f"[ocr] {lang} 实例就绪，运行设备：未知")
+    return inst
 
 
 def _predict(inst, img):
@@ -139,6 +177,30 @@ class _Pool:
 _pools = {}
 _pools_lock = threading.Lock()
 
+# device_info() 的缓存。paddle 是不是 GPU 版、有没有卡，在进程生命周期内
+# 不会变，探一次就够；None 表示还没探过。
+_device = {"v": None}
+
+
+def device_info() -> str:
+    """当前 paddle 实际运行设备：gpu / cpu / unknown。
+
+    惰性探测：import paddle 要几秒，不该拖慢服务启动，所以只在首次建
+    OCR 实例或状态页请求 /ocr-status 时才探，结果缓存。
+    """
+    if _device["v"] is None:
+        try:
+            import paddle
+
+            if (getattr(paddle, "is_compiled_with_cuda", lambda: False)()
+                    and paddle.device.cuda.device_count() > 0):
+                _device["v"] = "gpu"
+            else:
+                _device["v"] = "cpu"
+        except Exception:  # noqa: BLE001
+            _device["v"] = "unknown"
+    return _device["v"]
+
 
 def _get_pool(lang: str) -> _Pool:
     with _pools_lock:
@@ -148,26 +210,82 @@ def _get_pool(lang: str) -> _Pool:
 
 
 def pool_status():
-    """供状态页用：返回已加载（预热过）的语言模型及其实例数。
+    """供状态页用：device 是 paddle 实际运行设备；models 是已加载（预热过）
+    的语言模型及实例数。
 
-    模型按需创建：第一次跑某种语言才会下载。列表为空说明还没翻译过任何图，
-    不能断定 OCR 是否可用——那要实际跑一次才知道。
+    模型按需创建：第一次跑某种语言才会下载。models 为空只说明还没翻译过
+    任何图，不能断定 OCR 是否可用——那要实际跑一次才知道。
     """
     with _pools_lock:
-        return {lang: p.made for lang, p in _pools.items()}
+        models = {lang: p.made for lang, p in _pools.items()}
+    return {"device": device_info(), "models": models}
 
 
-def _ocr_lines(img, lang: str):
-    """对单张（尺寸正常的）图识别，返回文字行列表。"""
+def _retry_enabled(lang: str) -> bool:
+    """低置信度行重试开关。
+
+    默认只对韩语开（基准实测 recall 0.11 → 0.65，日/英不受影响）；
+    OCR_RETRY_LOW_CONF=1 对所有语言开，=0 全关。
+    """
+    v = os.getenv("OCR_RETRY_LOW_CONF", "").strip().lower()
+    if v in {"1", "true", "yes", "on"}:
+        return True
+    if v in {"0", "false", "no", "off"}:
+        return False
+    return lang == "korean"
+
+
+def _retry_low_conf(img, lines, lang):
+    """低置信度行裁剪重试：同一模型，只换输入尺度。
+
+    韩语模型对小字号/细笔画间歇性失手（README 已知限制），把该行按原分辨率
+    裁出来单独送检，尺度变化常能给出更好的结果；重试置信度更高才采纳，
+    否则保留首遍结果。只对行级 bbox 操作，不动块合并逻辑。
+    """
+    if not _retry_enabled(lang):
+        return lines
+    h, w = img.shape[:2]
+    for ln in lines:
+        if ln["conf"] >= RETRY_CONF:
+            continue
+        mx, my = int(ln["w"] * RETRY_MARGIN), int(ln["h"] * RETRY_MARGIN)
+        x1 = max(0, int(ln["x"]) - mx)
+        y1 = max(0, int(ln["y"]) - my)
+        x2 = min(w, int(ln["x"] + ln["w"]) + mx)
+        y2 = min(h, int(ln["y"] + ln["h"]) + my)
+        crop = img[y1:y2, x1:x2]
+        if not crop.size:
+            continue
+        # retry=False 防递归：裁剪图里再认出低置信度行也不继续套娃
+        retry = _ocr_lines(crop, lang, retry=False)
+        if not retry:
+            continue
+        best = max(retry, key=lambda r: r["conf"])
+        if best["conf"] > ln["conf"]:
+            ln["text"] = best["text"]
+            ln["conf"] = best["conf"]
+    return lines
+
+
+def _ocr_lines(img, lang, retry=True):
+    """对单张（尺寸正常的）图识别，返回文字行列表。
+
+    重试模式（OCR_RETRY_LOW_CONF=1）下进门门槛从 0.5 放宽到 RETRY_FLOOR：
+    实测韩语整页识别时，检测框质量差会让正确文本被识成低置信乱码，
+    在 0.5 门槛处直接丢掉、重试根本轮不到。放进门槛后裁剪重试，
+    救得回的留下，救不回的再按 0.5 收口丢弃。
+    """
     pool = _get_pool(lang)
     inst = pool.acquire()
     try:
         result = _predict(inst, img)
     finally:
         pool.release(inst)
+    enabled = retry and _retry_enabled(lang)
+    floor = RETRY_FLOOR if enabled else 0.5
     lines = []
     for box, text, conf in result:
-        if conf < 0.5 or not text.strip():
+        if conf < floor or not text.strip():
             continue
         xs = [p[0] for p in box]
         ys = [p[1] for p in box]
@@ -181,7 +299,10 @@ def _ocr_lines(img, lang: str):
                 "conf": conf,
             }
         )
-    return lines
+    if not enabled:
+        return lines
+    lines = _retry_low_conf(img, lines, lang)
+    return [ln for ln in lines if ln["conf"] >= 0.5]
 
 
 # 自动检测时试跑的候选模型。日/韩/中文模型同时也认拉丁字母，
@@ -237,7 +358,8 @@ def detect_lang(img) -> str:
         score = sum(
             ln["conf"] * sum(w.get(_script(c), 0.0) for c in ln["text"])
             for s in samples
-            for ln in _ocr_lines(s, lang)
+            # 检测只要文字种类和粗略置信度，重试救行是精翻阶段的事
+            for ln in _ocr_lines(s, lang, retry=False)
         )
         if score > best_score:
             best, best_score = lang, score
@@ -245,7 +367,8 @@ def detect_lang(img) -> str:
 
 
 def run_ocr(img, lang: str = "japan"):
-    """返回 [{x, y, w, h, text}, ...]，坐标为原图像素。过高的图自动切片识别。"""
+    """返回 [{x, y, w, h, text, conf}, ...]，坐标为原图像素，conf 为组内行
+    置信度均值。过高的图自动切片识别。"""
     h, w = img.shape[:2]
     tile_h = _tile_height(w)
     if h <= tile_h:                 # 一块装得下，不必切
@@ -346,6 +469,9 @@ def merge_lines(lines):
                 "w": round(x2 - x1),
                 "h": round(y2 - y1),
                 "text": text,
+                # 组内行置信度均值：低置信块提示这行可能是误识别（韩语尤其），
+                # 也是 OCR_RETRY_LOW_CONF 之外的排查线索
+                "conf": round(sum(m.get("conf", 0.0) for m in g) / len(g), 2),
             }
         )
     return out
